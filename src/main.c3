@@ -2,7 +2,8 @@ module benq;
 import std::io;
 import std::os::process;
 import std::collections::list;
-import sdl;
+import nuklear;
+import nuklear_sdl_gl3;
 
 struct Monitor {
     String model;
@@ -335,26 +336,42 @@ fn Monitor detect_monitor() => @pool() {
 //     io::printn(output);
 // }
 
+const uint SDL_WINDOWPOS_CENTERED = 0x2FFF0000;
+const uint SDL_QUIT = 100;
 
 fn int main(String[] args) {
-    // Monitor m = detect_monitor();
-    // io::printn(m);
-    // get_capabilities();
-    sdl::init(1);
-    // VcpInfo val = get_vcp(BRIGHTNESS, "2")!!;
-    // io::printn(val);
+    nuklear::sdl_init(nuklear::SDL_INIT_VIDEO);
+    nuklear::sdl_gl_setattribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    nuklear::sdl_gl_setattribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    // nuklear::sdl_gl_setattribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
-      // switch (val.value.kind) {
-      //     case RANGE: {
-      //             uint[2] s = val.value.data.range_val;
-      //       }
-      //     case ENUM_VAL:
-      //     case BOOL_VAL:
-      //     case RAW:
-      //     default: 
-      //   }
+  SDL_Window *win = nuklear::sdl_createwindow(
+      "Benq", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 800, 600,
+      (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_OPENGL |  (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_SHOWN |  (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_ALLOW_HIGHDPI);
+ 
+  SDL_GLContext glctx = nuklear::sdl_gl_createcontext(win);
+  nuklear::sdl_gl_makecurrent(win, glctx);
+  nuklear::sdl_gl_setswapinterval(1);
+  
+  nuklear::glewExperimental = 1;
+  nuklear::glewinit();
 
-    // bool s = set_vcp(2, 10, BRIGHTNESS);
-    // io::printn(val);
+  Nk_context *ctx = nuklear::nk_sdl_init(win);
+  nuklear::Nk_font_atlas *atlas;
+  nuklear::nk_sdl_font_stash_begin(&atlas);
+  nuklear::nk_sdl_font_stash_end();
+
+    int running = 1;
+    while(running) {
+        nuklear::SDL_Event evt;
+        nuklear::nk_input_begin(ctx);
+        while (nuklear::sdl_pollevent(&evt)){
+            if (evt.type == SDL_QUIT) running = 0;
+            nuklear::nk_sdl_handle_event(&evt);
+          }
+
+        nuklear::nk_input_end(ctx);
+      }
+  
     return 0;
 }
