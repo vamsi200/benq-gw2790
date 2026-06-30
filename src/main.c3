@@ -4,6 +4,7 @@ import std::os::process;
 import std::collections::list;
 import nuklear;
 import nuklear_sdl_gl3;
+import std::thread::channel;
 
 struct Monitor {
     String model;
@@ -26,13 +27,13 @@ struct ColorGain {
 
 constdef ColorMode : uint {
     M_BOOK = 0x0f,
-    CINEMA,
-    GAME,
-    EPAPER,
-    USER,
-    STANDARD,
-    CODING,
-    CARE_MODE
+    CINEMA = 0x32,
+    GAME = 0x28,
+    EPAPER = 0x27,
+    USER = 0x12,
+    STANDARD = 0x00,
+    CODING = 0x27,
+    CARE_MODE = 0x27
 }
 
 struct MonitorState {
@@ -50,7 +51,7 @@ struct MonitorState {
 
 // Bluish 9300 K (sl=0x08)
 // UserDefine User 1 (sl=0x0b)
-//
+// 
 struct UserDefine {
     int r;
     int g;
@@ -114,7 +115,7 @@ struct VcpValue {
     VcpKind kind;
     union data {
         uint[2] range_val;
-        char enum_val;
+        String enum_val;
         bool bool_val;
         ushort raw_val;
     }
@@ -124,15 +125,17 @@ struct VcpInfo {
     String code;
     String name;
     VcpValue value;
-    bool writable;
 }
 
 faultdef CMD_RUN_FAILED;
 
-fn VcpInfo? get_vcp(String code, String bus) => @pool(){
+fn VcpInfo? get_vcp(String code, String bus) => @pool() {
     char[1024] buf;
 
-    String? output = process::run_capture_stdout(&buf, { "ddcutil", "getvcp", code, "--bus", bus });
+    String? output   = process::run_capture_stdout(
+        &buf,
+        { "ddcutil", "getvcp", code, "--bus", bus }
+    );
     VcpInfo vcp_info = { };
     VcpValue vcp_val = { };
 
@@ -143,32 +146,57 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool(){
         long? idx1 = line.index_of("(")!;
         long? idx2 = line.index_of(")")!;
 
-        if (catch idx1) vcp_info.name = "unknown";
-        if (catch idx2) vcp_info.name = "unknown";
+        if (catch idx1) vcp_info.name = "unknown".copy(mem);
+        if (catch idx2) vcp_info.name = "unknown".copy(mem);
 
         vcp_info.name = line[idx1 + 1..idx2 - 1]!.trim().copy(mem);
         vcp_val.kind = VcpKind.RANGE;
-        vcp_info.writable = true;
         vcp_info.code = code;
-        vcp_info.value = vcp_val;
 
         String[] parts = line.split(tmem, ",");
         vcp_val.data.range_val[0] = (uint)parts[0].split(tmem, "=")[1].trim().to_int()!;
         vcp_val.data.range_val[1] = (uint)parts[1].split(tmem, "=")[1].trim().to_int()!;
+        vcp_info.value = vcp_val;
     }
 
+    if (line.contains("Display Mode")) {
+          long? idx = line.index_of("=")!;
+          long? idx2 = line.rindex_of(")")!;
+
+          if (catch idx) vcp_info.name = "unknown".copy(mem);
+          if (catch idx2) vcp_info.name = "unknown".copy(mem);
+
+          //vcp_info.name = 
+          vcp_val.kind = VcpKind.ENUM_VAL;
+          vcp_info.code = code;
+          vcp_val.data.enum_val = line[idx+1..idx2 - 1]!;
+          vcp_info.value = vcp_val;
+    }
 
     return vcp_info;
 }
 
-fn bool set_vcp(uint bus, uint val, String code) {
-    char[1024] buf;
-    String b = string::tformat("%s", bus);
+fn ColorMode convert_da_thing(String color_code) {
+    ColorMode cm;
+    switch (color_code) {
+        case "0x0f": cm = ColorMode.M_BOOK;
+        case "0x32": cm = ColorMode.CINEMA;
+        case "0x28": cm = ColorMode.GAME;
+        case "0x27": cm = ColorMode.EPAPER;
+        case "0x12": cm = ColorMode.USER;
+        case "0x00": cm = ColorMode.STANDARD;
+        default: cm = ColorMode.M_BOOK;
+    }
+
+    return cm;
+}
+fn bool set_vcp(String bus, uint val, String code) => @pool(){
     String v = string::tformat("%s", val);
+    char[1024] buf;
 
     String? output = process::run_capture_stdout(
         &buf,
-        { "ddcutil", "setvcp", code, v, "--bus", b }
+        { "ddcutil", "setvcp", code, v, "--bus", bus }
     )!!;
     if (catch output) return false;
     return true;
@@ -337,41 +365,133 @@ fn Monitor detect_monitor() => @pool() {
 // }
 
 const uint SDL_WINDOWPOS_CENTERED = 0x2FFF0000;
-const uint SDL_QUIT = 100;
+const uint SDL_QUIT               = 0x100;
+const uint GL_COLOR_BUFFER_BIT    = 0x00004000;
+
+fn void gui_thing(BufferedChannel{uint}* bc) {
+    LibcAllocator libc;
+    @pool_init(&libc, 8096) {
+        nuklear::sdl_init(nuklear::SDL_INIT_VIDEO);
+        nuklear::sdl_gl_setattribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        nuklear::sdl_gl_setattribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+        nuklear::sdl_gl_setattribute(
+            SDL_GL_CONTEXT_PROFILE_MASK,
+            (int)SDL_GLprofile.SDL_GL_CONTEXT_PROFILE_CORE
+        );
+
+        SDL_Window* win = nuklear::sdl_createwindow(
+            "Benq",
+            SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED,
+            800,
+            600,
+            (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_OPENGL
+                | (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_SHOWN
+                | (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_ALLOW_HIGHDPI
+        );
+
+        SDL_GLContext glctx = nuklear::sdl_gl_createcontext(win);
+        nuklear::sdl_gl_makecurrent(win, glctx);
+        nuklear::sdl_gl_setswapinterval(1);
+
+        nuklear::glewExperimental = 1;
+        nuklear::glewinit();
+
+        Nk_context* ctx = nuklear::nk_sdl_init(win);
+        nuklear::Nk_font_atlas* atlas;
+        nuklear::nk_sdl_font_stash_begin(&atlas);
+        nuklear::nk_sdl_font_stash_end();
+        VcpInfo info = get_vcp(BRIGHTNESS, "2")!!;
+        int[2] data;
+        ColorMode color_code;
+
+        switch (info.value.kind) {
+            case RANGE: data = info.value.data.range_val;
+            case ENUM_VAL: color_code = convert_da_thing(info.value.data.enum_val);
+            default:
+        }
+
+        String color_code_str = string::tformat("%s", color_code);
+        io::printn(color_code_str);
+        float slider_val = (float)data[0] / 100;
+        float max_value  = (float)data[1] / 100;
+        int running      = 1;
+      
+        while (running) {
+            nuklear::SDL_Event evt;
+            nuklear::nk_input_begin(ctx);
+            while (nuklear::sdl_pollevent(&evt)) {
+                if (evt.type == SDL_QUIT) running = 0;
+                nuklear::nk_sdl_handle_event(&evt);
+            }
+
+            nuklear::nk_input_end(ctx);
+            int w, h;
+            nuklear::sdl_getwindowsize(win, &w, &h);
+
+            if (nuklear::nk_begin(
+                ctx,
+                "Main",
+                nuklear::nk_rect(0, 0, w, h),
+                (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
+            )) {
+                nuklear::nk_layout_row_dynamic(ctx, 30, 3);
+                nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                nuklear::nk_label(ctx, "Brightness", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+                nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                if (nuklear::nk_slider_float(ctx, 0.0f, &&slider_val, max_value, 0.01f)) {
+                    if (@ok(bc.try_push((uint)(slider_val * 100.0f)))) io::printn("sent");
+                }
+                if (nuklear::nk_button_symbol_label(ctx, Nk_symbol_type.NK_SYMBOL_CIRCLE_SOLID, color_code_str, (uint)Nk_text_alignment.NK_TEXT_LEFT)){
+
+                }
+            }
+            nuklear::nk_end(ctx);
+
+            nuklear::glViewport(0, 0, w, h);
+            nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
+            nuklear::glClear(GL_COLOR_BUFFER_BIT);
+            nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
+            nuklear::sdl_gl_swapwindow(win);
+        }
+
+        nuklear::nk_sdl_shutdown();
+        nuklear::sdl_gl_deletecontext(glctx);
+        nuklear::sdl_destroywindow(win);
+        nuklear::sdl_quit();
+    };
+}
+
+fn void change_brightness(BufferedChannel{uint}* bc) {
+    LibcAllocator libc;
+    @pool_init(&libc, 512) {
+        for (;;) {
+            uint value = bc.pop()!!;
+            thread::sleep_ms(80);
+
+            for (;;) {
+                uint? next = bc.try_pop();
+                if (catch next) break;
+                value = next;
+            }
+
+            if (set_vcp("2", value, BRIGHTNESS)) io::printn("val set");
+        }
+    };
+}
+
 
 fn int main(String[] args) {
-    nuklear::sdl_init(nuklear::SDL_INIT_VIDEO);
-    nuklear::sdl_gl_setattribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    nuklear::sdl_gl_setattribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    // nuklear::sdl_gl_setattribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    // get_vcp("0xdc", "2")!!;
+    Thread tg, tb;
+    BufferedChannel{uint}* bc = channel::create_buffered(mem, 1024 * 1024)!!;
+    defer bc.destroy();
 
-  SDL_Window *win = nuklear::sdl_createwindow(
-      "Benq", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 800, 600,
-      (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_OPENGL |  (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_SHOWN |  (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_ALLOW_HIGHDPI);
- 
-  SDL_GLContext glctx = nuklear::sdl_gl_createcontext(win);
-  nuklear::sdl_gl_makecurrent(win, glctx);
-  nuklear::sdl_gl_setswapinterval(1);
-  
-  nuklear::glewExperimental = 1;
-  nuklear::glewinit();
+    tg.create((ThreadFn)&gui_thing, bc)!!;
+    tb.create((ThreadFn)&change_brightness, bc)!!;
+    tg.join()!!;
+    tb.join()!!;
 
-  Nk_context *ctx = nuklear::nk_sdl_init(win);
-  nuklear::Nk_font_atlas *atlas;
-  nuklear::nk_sdl_font_stash_begin(&atlas);
-  nuklear::nk_sdl_font_stash_end();
-
-    int running = 1;
-    while(running) {
-        nuklear::SDL_Event evt;
-        nuklear::nk_input_begin(ctx);
-        while (nuklear::sdl_pollevent(&evt)){
-            if (evt.type == SDL_QUIT) running = 0;
-            nuklear::nk_sdl_handle_event(&evt);
-          }
-
-        nuklear::nk_input_end(ctx);
-      }
-  
+    bc.close();
     return 0;
 }
