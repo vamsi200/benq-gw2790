@@ -25,44 +25,58 @@ struct ColorGain {
     int blue;
 }
 
-constdef ColorMode : uint {
-    M_BOOK = 0x0f,
-    CINEMA = 0x32,
-    GAME = 0x28,
-    EPAPER = 0x27,
-    USER = 0x12,
-    STANDARD = 0x00,
-    CODING = 0x27,
+constdef DisplayMode : uint {
+    M_BOOK    = 0x0f,
+    CINEMA    = 0x32,
+    GAME      = 0x28,
+    EPAPER    = 0x27,
+    USER      = 0x12,
+    STANDARD  = 0x00,
+    CODING    = 0x27,
     CARE_MODE = 0x27
 }
 
 struct MonitorState {
-    int brightness;
-    int contrast;
-    int volume;
-
-    bool muted;
-
-    InputSource input;
-    ColorMode mode;
-
-    ColorGain gain;
+    uint brightness;
+    uint max_brightness;
+    uint contrast;
+    uint max_contrast;
+    DisplayMode display_mode;
+    ColorTemperature color_temperature;
+    UserDefine user_define_color;
+    // int volume;
+    // 
+    // bool muted;
+    // 
+    // InputSource input;
+    // 
+    // ColorGain gain;
 }
 
-// Bluish 9300 K (sl=0x08)
-// UserDefine User 1 (sl=0x0b)
-// 
 struct UserDefine {
-    int r;
-    int g;
-    int b;
+    uint r;
+    uint g;
+    uint b;
 }
 
-enum ColorTemperature {
-    NORMAL,
-    BLUISH,
-    REDDISH,
-    USER_DEFINE
+const COLOR_TEMPERATURE_REQUEST = "0x0c";
+// Well this ain't working, we have to write to 0x0c, values are:
+
+
+
+// 28 - 5000K - Reddish - 0x04
+
+// 35 - 6500K - Normal - 0x05
+
+// 63 - 9300K - Bluish - 0x08
+
+// 35 * (r,g,b) - UserDefine - 0x0b
+
+constdef ColorTemperature : uint {
+    NORMAL      = 35,
+    BLUISH      = 63,
+    REDDISH     = 28,
+    USER_DEFINE = 11,
 }
 
 enum AudioScenario {
@@ -88,7 +102,7 @@ struct MonitorSettings {
     InputSource input;
 
     // Color
-    ColorMode color_mode;
+    DisplayMode color_mode;
     ColorTemperature color_temp;
     // Gamma gamma;
 
@@ -108,6 +122,7 @@ enum VcpKind {
     ENUM_VAL,
     BOOL_VAL,
     RAW,
+    MULTI,
     UNSUPPORTED,
 }
 
@@ -115,10 +130,17 @@ struct VcpValue {
     VcpKind kind;
     union data {
         uint[2] range_val;
+        uint[] multiple_val;
         String enum_val;
+        EnumValue color_val;
         bool bool_val;
         ushort raw_val;
     }
+}
+
+struct EnumValue {
+    ColorTemperature preset;
+    UserDefine rgb;
 }
 
 struct VcpInfo {
@@ -160,37 +182,106 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
     }
 
     if (line.contains("Display Mode")) {
-          long? idx = line.index_of("=")!;
-          long? idx2 = line.rindex_of(")")!;
+        long? idx  = line.index_of("=")!;
+        long? idx2 = line.rindex_of(")")!;
 
-          if (catch idx) vcp_info.name = "unknown".copy(mem);
-          if (catch idx2) vcp_info.name = "unknown".copy(mem);
+        if (catch idx) vcp_info.name = "unknown".copy(mem);
+        if (catch idx2) vcp_info.name = "unknown".copy(mem);
 
-          //vcp_info.name = 
-          vcp_val.kind = VcpKind.ENUM_VAL;
-          vcp_info.code = code;
-          vcp_val.data.enum_val = line[idx+1..idx2 - 1]!;
-          vcp_info.value = vcp_val;
+        vcp_val.kind = VcpKind.ENUM_VAL;
+        vcp_info.code = code;
+        vcp_val.data.enum_val = line[idx + 1..idx2 - 1]!;
+        vcp_info.name = color_mode_to_string(convert_da_thing(vcp_val.data.enum_val));
+        vcp_info.value = vcp_val;
+    }
+
+    if (line.contains("0x14")) {
+        vcp_val.kind = VcpKind.ENUM_VAL;
+        vcp_info.code = code;
+
+        if (line.contains("6500")) {
+            vcp_val.data.color_val.preset = NORMAL;
+            vcp_info.name = "Normal";
+        } else if (line.contains("5000")) {
+            vcp_val.data.color_val.preset = REDDISH;
+            vcp_info.name = "Reddish";
+        } else if (line.contains("9300")) {
+            vcp_val.data.color_val.preset = BLUISH;
+            vcp_info.name = "Bluish";
+        } else {
+            vcp_val.data.color_val.rgb = get_user_define_vals();
+            vcp_val.data.color_val.preset = USER_DEFINE;
+            vcp_info.name = "User Define";
+        }
+
+        vcp_info.value = vcp_val;
     }
 
     return vcp_info;
 }
 
-fn ColorMode convert_da_thing(String color_code) {
-    ColorMode cm;
+fn UserDefine get_user_define_vals() {
+    UserDefine ud;
+    ud.r = get_vcp(VIDEO_GAIN_RED, "2").value.data.range_val[0]!!;
+    ud.g = get_vcp(VIDEO_GAIN_GREEN, "2").value.data.range_val[0]!!;
+    ud.b = get_vcp(VIDEO_GAIN_BLUE, "2").value.data.range_val[0]!!;
+
+    return ud;
+}
+
+fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel) {
+    LibcAllocator libc;
+
+    @pool_init(&libc, 1024) {
+        MonitorState ms      = { };
+        VcpInfo brightness   = get_vcp(BRIGHTNESS, "2")!!;
+        VcpInfo contrast     = get_vcp(CONTRAST, "2")!!;
+        VcpInfo display_mode = get_vcp(DISPLAY_MODE, "2")!!;
+        VcpInfo color_preset = get_vcp(SELECT_COLOR_PRESET, "2")!!;
+
+        ms.color_temperature = color_preset.value.data.color_val.preset;
+        ms.brightness = brightness.value.data.range_val[0];
+        ms.max_brightness = brightness.value.data.range_val[1];
+
+        ms.contrast = contrast.value.data.range_val[0];
+        ms.max_contrast = contrast.value.data.range_val[1];
+
+        ms.display_mode = convert_da_thing(display_mode.value.data.enum_val);
+        ms.user_define_color = color_preset.value.data.color_val.rgb;
+
+        if (@ok(monitor_state_channel.push(ms))) return true;
+        return false;
+    };
+}
+
+fn String color_mode_to_string(DisplayMode cm) {
+    switch (cm) {
+        case DisplayMode.M_BOOK: return "M-Book";
+        case DisplayMode.CINEMA: return "Cinema";
+        case DisplayMode.GAME: return "Game";
+        case DisplayMode.EPAPER: return "ePaper";
+        case DisplayMode.USER: return "User";
+        case DisplayMode.STANDARD: return "Standard";
+        default: return "Unknown";
+    }
+}
+
+fn DisplayMode convert_da_thing(String color_code) {
+    DisplayMode cm;
     switch (color_code) {
-        case "0x0f": cm = ColorMode.M_BOOK;
-        case "0x32": cm = ColorMode.CINEMA;
-        case "0x28": cm = ColorMode.GAME;
-        case "0x27": cm = ColorMode.EPAPER;
-        case "0x12": cm = ColorMode.USER;
-        case "0x00": cm = ColorMode.STANDARD;
-        default: cm = ColorMode.M_BOOK;
+        case "0x0f": cm = DisplayMode.M_BOOK;
+        case "0x32": cm = DisplayMode.CINEMA;
+        case "0x28": cm = DisplayMode.GAME;
+        case "0x27": cm = DisplayMode.EPAPER;
+        case "0x12": cm = DisplayMode.USER;
+        case "0x00": cm = DisplayMode.STANDARD;
+        default: cm = DisplayMode.M_BOOK;
     }
 
     return cm;
 }
-fn bool set_vcp(String bus, uint val, String code) => @pool(){
+
+fn bool set_vcp(String bus, uint val, String code) => @pool() {
     String v = string::tformat("%s", val);
     char[1024] buf;
 
@@ -345,31 +436,48 @@ fn Monitor detect_monitor() => @pool() {
     return monitor;
 }
 
-// fn void get_capabilities() => @pool() {
-//     char[4096] buf;
-//     String output    = process::run_capture_stdout(
-//         &buf,
-//         { "ddcutil", "capabilities", "--bus", "2" }
-//     )!!;
-//     bool in_commands = false;
-// 
-//     foreach (raw_line : output.split(tmem, "\n")) {
-//         String line = raw_line.trim();
-//         if (line.starts_with("Commands")) {
-//             in_commands = true;
-//             continue;
-//         }
-//     }
-// 
-//     io::printn(output);
-// }
 
 const uint SDL_WINDOWPOS_CENTERED = 0x2FFF0000;
 const uint SDL_QUIT               = 0x100;
 const uint GL_COLOR_BUFFER_BIT    = 0x00004000;
 
-fn void gui_thing(BufferedChannel{uint}* bc) {
+struct DisplayModes {
+    String name;
+    DisplayMode mode;
+}
+
+struct TemperatureModes {
+    String name;
+    ColorTemperature mode;
+}
+
+constdef CommandType : uint {
+    SET_BRIGHTNESS,
+    SET_COLOR_MODE,
+    SET_CONTRAST,
+    SET_COLOR_PRESET,
+    SET_RED_GAIN,
+    SET_GREEN_GAIN,
+    SET_BLUE_GAIN,
+}
+
+union CommandValue {
+    uint brightness;
+    DisplayMode mode;
+    uint contrast;
+    uint val;
+    ColorTemperature color_temp;
+}
+
+struct MonitorCommand {
+    CommandType type;
+    CommandValue value;
+}
+
+fn void gui_thing(GuiArgs* args) {
     LibcAllocator libc;
+    BufferedChannel{MonitorCommand}* bc = args.channel;
+
     @pool_init(&libc, 8096) {
         nuklear::sdl_init(nuklear::SDL_INIT_VIDEO);
         nuklear::sdl_gl_setattribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -401,58 +509,256 @@ fn void gui_thing(BufferedChannel{uint}* bc) {
         nuklear::Nk_font_atlas* atlas;
         nuklear::nk_sdl_font_stash_begin(&atlas);
         nuklear::nk_sdl_font_stash_end();
-        VcpInfo info = get_vcp(BRIGHTNESS, "2")!!;
-        int[2] data;
-        ColorMode color_code;
 
-        switch (info.value.kind) {
-            case RANGE: data = info.value.data.range_val;
-            case ENUM_VAL: color_code = convert_da_thing(info.value.data.enum_val);
-            default:
-        }
+        uint brightness, max_brightness, contrast, max_contrast;
+        DisplayMode display_code;
+        float brightness_slider_val, brightness_max_value, constrast_slider_val, constrast_max_value;
+        int running = 1;
+        ColorTemperature color_code;
+        float red, green, blue;
 
-        String color_code_str = string::tformat("%s", color_code);
-        io::printn(color_code_str);
-        float slider_val = (float)data[0] / 100;
-        float max_value  = (float)data[1] / 100;
-        int running      = 1;
-      
+        bool state_received = false;
+        DisplayModes[] display_modes = {
+            { "M-BOOK", DisplayMode.M_BOOK },
+            { "Cinema", DisplayMode.CINEMA },
+            { "Game", DisplayMode.GAME },
+            { "ePaper", DisplayMode.EPAPER },
+            { "User", DisplayMode.USER },
+            { "Standard", DisplayMode.STANDARD },
+        };
+
+        TemperatureModes[] temp_modes = {
+            { "Normal", ColorTemperature.NORMAL },
+            { "Bluish", ColorTemperature.BLUISH },
+            { "Reddish", ColorTemperature.REDDISH },
+            { "User Define", ColorTemperature.USER_DEFINE }
+        };
+
         while (running) {
+            if (!state_received) {
+                MonitorState? ms = args.monitor_state_channel.try_pop();
+                if (@ok(ms)) {
+                    brightness_slider_val = (float)(ms.brightness)!! / 100;
+                    brightness_max_value = (float)(ms.max_brightness)!! / 100;
+                    constrast_slider_val = (float)(ms.contrast)!! / 100;
+                    constrast_max_value = (float)(ms.max_contrast)!! / 100;
+                    color_code = ms.color_temperature!!;
+                    display_code = ms.display_mode!!;
+                    red = (float)(ms.user_define_color.r)!! / 100;
+                    green = (float)(ms.user_define_color.g)!! / 100;
+                    blue = (float)(ms.user_define_color.b)!! / 100;
+                    io::printn(red);
+                    io::printn(green);
+                    io::printn(blue);
+
+                    state_received = true;
+                }
+            }
             nuklear::SDL_Event evt;
             nuklear::nk_input_begin(ctx);
             while (nuklear::sdl_pollevent(&evt)) {
                 if (evt.type == SDL_QUIT) running = 0;
                 nuklear::nk_sdl_handle_event(&evt);
             }
+            if (state_received) {
+                nuklear::nk_input_end(ctx);
+                int w, h;
+                nuklear::sdl_getwindowsize(win, &w, &h);
 
-            nuklear::nk_input_end(ctx);
-            int w, h;
-            nuklear::sdl_getwindowsize(win, &w, &h);
+                if (nuklear::nk_begin(
+                    ctx,
+                    "Main",
+                    nuklear::nk_rect(0, 0, w, h),
+                    (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
+                )) {
+                    nuklear::nk_layout_row_dynamic(ctx, 30, 3);
+                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                    nuklear::nk_label(ctx, "Brightness", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                    if (nuklear::nk_slider_float(
+                        ctx,
+                        0.0f,
+                        &&brightness_slider_val,
+                        brightness_max_value,
+                        0.01f
+                    )) {
+                        if (@ok(
+                            bc.try_push(
+                                {
+                                    .type = CommandType.SET_BRIGHTNESS,
+                                    .value = {
+                                        .brightness = (uint)(brightness_slider_val * 100.f)
+                                    },
+                                }
+                            )
+                        )) io::printn("sent");
+                    }
 
-            if (nuklear::nk_begin(
-                ctx,
-                "Main",
-                nuklear::nk_rect(0, 0, w, h),
-                (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
-            )) {
-                nuklear::nk_layout_row_dynamic(ctx, 30, 3);
-                nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                nuklear::nk_label(ctx, "Brightness", (uint)Nk_text_alignment.NK_TEXT_LEFT);
-                nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                if (nuklear::nk_slider_float(ctx, 0.0f, &&slider_val, max_value, 0.01f)) {
-                    if (@ok(bc.try_push((uint)(slider_val * 100.0f)))) io::printn("sent");
+                    nuklear::nk_layout_row_dynamic(ctx, 30, 3);
+                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                    nuklear::nk_label(ctx, "Constrast", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                    if (nuklear::nk_slider_float(
+                        ctx,
+                        0.0f,
+                        &&constrast_slider_val,
+                        constrast_max_value,
+                        0.01f
+                    )) {
+                        if (@ok(
+                            bc.try_push(
+                                {
+                                    .type = CommandType.SET_CONTRAST,
+                                    .value = { .contrast = (uint)(constrast_slider_val * 100.f) },
+                                }
+                            )
+                        )) io::printn("sent");
+                    }
+
+                    nuklear::nk_label(ctx, "Display Mode", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+
+                    nuklear::nk_layout_row_dynamic(ctx, 28, 1);
+
+                    foreach (DisplayModes dm : display_modes) {
+                        Nk_symbol_type symbol = dm.mode
+                            == display_code ? Nk_symbol_type
+                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type.NK_SYMBOL_CIRCLE_OUTLINE;
+
+                        if (nuklear::nk_button_symbol_label(
+                            ctx,
+                            symbol,
+                            dm.name,
+                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                        )) {
+                            if (dm.mode != display_code) {
+                                display_code = dm.mode;
+                                if (@ok(
+                                    bc.try_push(
+                                        {
+                                            .type = CommandType.SET_COLOR_MODE,
+                                            .value = { .mode = display_code },
+                                        }
+                                    )
+                                )) io::printn("sent");
+                            }
+                        }
+                    }
+                    nuklear::nk_label(ctx, "Color Preset", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+                    nuklear::nk_layout_row_dynamic(ctx, 28, 1);
+
+
+                    foreach (TemperatureModes tm : temp_modes) {
+                        Nk_symbol_type symbol = tm.mode
+                            == color_code ? Nk_symbol_type
+                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type.NK_SYMBOL_CIRCLE_OUTLINE;
+
+                        if (nuklear::nk_button_symbol_label(
+                            ctx,
+                            symbol,
+                            tm.name,
+                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                        )) {
+                            if (tm.mode != color_code) {
+                                color_code = tm.mode;
+                                if (color_code != ColorTemperature.USER_DEFINE) {
+                                    if (@ok(
+                                        bc.try_push(
+                                            {
+                                                .type = CommandType.SET_COLOR_PRESET,
+                                                .value = { .color_temp = color_code },
+                                            }
+                                        )
+                                    )) io::printn("sent");
+                                }
+                            }
+                        }
+                    }
+
+                    if (color_code == ColorTemperature.USER_DEFINE) {
+                        nuklear::nk_layout_row_dynamic(ctx, 10, 1);
+                        nuklear::nk_spacing(ctx, 1);
+
+                        nuklear::nk_layout_row_dynamic(ctx, 20, 1);
+                        nuklear::nk_label(ctx, "RGB Gains", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+
+                        if (nuklear::nk_slider_float(ctx, 0.0f, &red, 100, 0.01f)) {
+                            if (@ok(
+                                bc.try_push(
+                                    {
+                                        .type = CommandType.SET_RED_GAIN,
+                                        .value = { .val = (uint)(red * 100.0f) }
+                                    }
+                                )
+                            ));}
+
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        if (nuklear::nk_slider_float(ctx, 0.0f, &green, 100, 0.01f)) {
+                            if (@ok(
+                                bc.try_push(
+                                    {
+                                        .type = CommandType.SET_GREEN_GAIN,
+                                        .value = { .val = (uint)(green * 100.0f), }
+                                    }
+                                )
+                            ));}
+
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        if (nuklear::nk_slider_float(ctx, 0.0f, &blue, 100, 0.01f)) {
+                            if (@ok(
+                                bc.try_push(
+                                    {
+                                        .type = CommandType.SET_BLUE_GAIN,
+                                        .value = { .val = (uint)(blue * 100.0f) }
+                                    }
+                                )
+                            ));}
+                    }
                 }
-                if (nuklear::nk_button_symbol_label(ctx, Nk_symbol_type.NK_SYMBOL_CIRCLE_SOLID, color_code_str, (uint)Nk_text_alignment.NK_TEXT_LEFT)){
 
+                nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+
+                nuklear::nk_end(ctx);
+
+                nuklear::glViewport(0, 0, w, h);
+                nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
+                nuklear::glClear(GL_COLOR_BUFFER_BIT);
+                nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
+                nuklear::sdl_gl_swapwindow(win);
+            } else {
+                int w, h;
+                nuklear::sdl_getwindowsize(win, &w, &h);
+                Nk_rect bounds = nuklear::nk_rect(0, 0, 300, 100);
+                bounds.x = (w - bounds.w) / 2.0f;
+                bounds.y = (h - bounds.h) / 2.0f;
+                if (nuklear::nk_begin(
+                    ctx,
+                    "Loading",
+                    bounds,
+                    (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
+                )) {
+                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                    nuklear::nk_label(
+                        ctx,
+                        "Getting monitor information...",
+                        (uint)Nk_text_alignment.NK_TEXT_CENTERED
+                    );
+
+                    nuklear::nk_layout_row_dynamic(ctx, 20, 1);
+                    nuklear::nk_label(
+                        ctx,
+                        "Please wait...",
+                        (uint)Nk_text_alignment.NK_TEXT_CENTERED
+                    );
+                    nuklear::nk_end(ctx);
+                    nuklear::glViewport(0, 0, w, h);
+                    nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
+                    nuklear::glClear(GL_COLOR_BUFFER_BIT);
+                    nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
+                    nuklear::sdl_gl_swapwindow(win);
                 }
             }
-            nuklear::nk_end(ctx);
-
-            nuklear::glViewport(0, 0, w, h);
-            nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
-            nuklear::glClear(GL_COLOR_BUFFER_BIT);
-            nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
-            nuklear::sdl_gl_swapwindow(win);
         }
 
         nuklear::nk_sdl_shutdown();
@@ -462,36 +768,105 @@ fn void gui_thing(BufferedChannel{uint}* bc) {
     };
 }
 
-fn void change_brightness(BufferedChannel{uint}* bc) {
+fn void change_stuff(BufferedChannel{MonitorCommand}* bc) {
     LibcAllocator libc;
     @pool_init(&libc, 512) {
         for (;;) {
-            uint value = bc.pop()!!;
+            MonitorCommand? cmd = bc.pop();
+            if (catch cmd) return;
+
+            uint br_value    = cmd.value.brightness;
+            uint ct_value    = cmd.value.contrast;
+            uint red_value   = cmd.value.val;
+            uint green_value = cmd.value.val;
+            uint blue_value  = cmd.value.val;
+
             thread::sleep_ms(80);
 
-            for (;;) {
-                uint? next = bc.try_pop();
-                if (catch next) break;
-                value = next;
-            }
+            switch (cmd.type) {
+                case CommandType.SET_BRIGHTNESS:
+                    for (;;) {
+                        MonitorCommand? next = bc.try_pop();
+                        if (catch next) break;
+                        if (next.type
+                            == CommandType.SET_BRIGHTNESS) br_value = next.value.brightness;
+                    }
+                    set_vcp("2", br_value, BRIGHTNESS);
 
-            if (set_vcp("2", value, BRIGHTNESS)) io::printn("val set");
+                case CommandType.SET_CONTRAST:
+                    for (;;) {
+                        MonitorCommand? next = bc.try_pop();
+                        if (catch next) break;
+                        if (next.type == CommandType.SET_CONTRAST) ct_value = next.value.contrast;
+                    }
+                    set_vcp("2", ct_value, CONTRAST);
+
+                case CommandType.SET_COLOR_MODE:
+                    set_vcp("2", (uint)cmd.value.mode, DISPLAY_MODE);
+
+                case CommandType.SET_COLOR_PRESET:
+                    set_vcp("2", (uint)cmd.value.color_temp, COLOR_TEMPERATURE_REQUEST);
+
+                case CommandType.SET_RED_GAIN:
+                    for (;;) {
+                        MonitorCommand? next = bc.try_pop();
+                        if (catch next) break;
+                        if (next.type == CommandType.SET_RED_GAIN) red_value = next.value.val;
+                    }
+                    set_vcp("2", red_value, VIDEO_GAIN_RED);
+
+                case CommandType.SET_GREEN_GAIN:
+                    for (;;) {
+                        MonitorCommand? next = bc.try_pop();
+                        if (catch next) break;
+                        if (next.type == CommandType.SET_GREEN_GAIN) green_value = next.value.val;
+                    }
+                    set_vcp("2", green_value, VIDEO_GAIN_GREEN);
+
+                case CommandType.SET_BLUE_GAIN:
+                    for (;;) {
+                        MonitorCommand? next = bc.try_pop();
+                        if (catch next) break;
+                        if (next.type == CommandType.SET_BLUE_GAIN) blue_value = next.value.val;
+                    }
+                    set_vcp("2", blue_value, VIDEO_GAIN_BLUE);
+
+                default:
+            }
         }
     };
 }
 
+struct GuiArgs {
+    BufferedChannel{MonitorCommand}* channel;
+    BufferedChannel{MonitorState}* monitor_state_channel;
+}
 
 fn int main(String[] args) {
-    // get_vcp("0xdc", "2")!!;
-    Thread tg, tb;
-    BufferedChannel{uint}* bc = channel::create_buffered(mem, 1024 * 1024)!!;
-    defer bc.destroy();
+    // VcpInfo color_preset = get_vcp(SELECT_COLOR_PRESET, "2")!!;
+    // io::printn(color_preset.value.data.color_val.rgb);
+    // io::printn(color_preset);
+    // UserDefine ud = get_user_define_vals();
+    // io::printn(ud);
 
-    tg.create((ThreadFn)&gui_thing, bc)!!;
-    tb.create((ThreadFn)&change_brightness, bc)!!;
+    Thread tg, tb, ts;
+    GuiArgs ga = { };
+    ga.channel = channel::create_buffered(mem, 1024 * 1024)!!;
+    ga.monitor_state_channel = channel::create_buffered(mem, 1024 * 1024)!!;
+    defer ga.monitor_state_channel.destroy();
+    defer ga.channel.destroy();
+
+
+    tg.create((ThreadFn)&gui_thing, &ga)!!;
+    tb.create((ThreadFn)&change_stuff, ga.channel)!!;
+    ts.create((ThreadFn)&load_monitor_state, ga.monitor_state_channel)!!;
     tg.join()!!;
-    tb.join()!!;
+    ga.channel.close();
 
-    bc.close();
+    tb.join()!!;
+    ts.join()!!;
+
+    ga.monitor_state_channel.close();
+
     return 0;
 }
