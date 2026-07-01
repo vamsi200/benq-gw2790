@@ -129,7 +129,237 @@ extern fn CInt sdl_gl_makecurrent(SDL_Window* window, SDL_GLContext context) @cn
 extern fn CInt sdl_gl_setswapinterval(CInt interval) @cname("SDL_GL_SetSwapInterval");
 extern fn GLenum glewinit() @cname("glewInit");
 
-alias Nk_context = void;
+struct Nk_context {
+  char[496] pad;
+  Nk_style style;
+}
+
+struct Nk_style {
+  char[104] pre_button_pad;   // offsetof(button) = 104
+  Nk_style_button button;     // 216 bytes, ends at 320
+  char[1344] pre_slider_pad;  // 1664 - 320 = 1344
+  Nk_style_slider slider;     // 776 bytes, ends at 2440
+  char[6056] pre_window_pad;  // 8496 - 2440 = 6056
+  Nk_style_window window;     // 856 bytes
+}
+
+// struct Nk_style {
+//   char[1664] pad;
+//   // Nk_user_font* font;
+//   // Nk_cursor*[7] cursors;
+//   // Nk_cursor* cursor_active;
+//   // Nk_cursor* cursor_last;
+//   // CInt cursor_visible;
+//   // Nk_style_text text;
+//   // Nk_style_button button;
+//   // Nk_style_button contextual_button;
+//   // Nk_style_button menu_button;
+//   // Nk_style_toggle option;
+//   // Nk_style_toggle checkbox;
+//   // Nk_style_selectable selectable;
+//   Nk_style_slider slider;
+//   // Nk_style_knob knob;
+//   // Nk_style_progress progress;
+//   // Nk_style_property property;
+//   // Nk_style_edit edit;
+//   // Nk_style_chart chart;
+//   // Nk_style_scrollbar scrollh;
+//   // Nk_style_scrollbar scrollv;
+//   // Nk_style_tab tab;
+//   // Nk_style_combo combo;
+//   Nk_style_window window;
+// }
+
+constdef Nk_style_header_align : CUInt {
+  NK_HEADER_LEFT = 0,
+  NK_HEADER_RIGHT = 1
+}
+
+struct Nk_style_window_header {
+  Nk_style_item normal;
+  Nk_style_item hover;
+  Nk_style_item active;
+  Nk_style_button close_button;
+  Nk_style_button minimize_button;
+  Nk_symbol_type close_symbol;
+  Nk_symbol_type minimize_symbol;
+  Nk_symbol_type maximize_symbol;
+  Nk_color label_normal;
+  Nk_color label_hover;
+  Nk_color label_active;
+  Nk_style_header_align align;
+  Nk_vec2 padding;
+  Nk_vec2 label_padding;
+  Nk_vec2 spacing;
+}
+
+constdef Nk_tooltip_pos : CUInt {
+  NK_TOP_LEFT = 0,
+  NK_TOP_CENTER = 1,
+  NK_TOP_RIGHT = 2,
+  NK_MIDDLE_LEFT = 3,
+  NK_MIDDLE_CENTER = 4,
+  NK_MIDDLE_RIGHT = 5,
+  NK_BOTTOM_LEFT = 6,
+  NK_BOTTOM_CENTER = 7,
+  NK_BOTTOM_RIGHT = 8
+}
+
+struct Nk_style_window {
+  Nk_style_window_header header;
+  Nk_style_item fixed_background;
+  Nk_color background;
+  Nk_color border_color;
+  Nk_color popup_border_color;
+  Nk_color combo_border_color;
+  Nk_color contextual_border_color;
+  Nk_color menu_border_color;
+  Nk_color group_border_color;
+  Nk_color tooltip_border_color;
+  Nk_style_item scaler;
+  float border;
+  float combo_border;
+  float contextual_border;
+  float menu_border;
+  float group_border;
+  float tooltip_border;
+  float popup_border;
+  float min_row_height_padding;
+  float rounding;
+  Nk_vec2 spacing;
+  Nk_vec2 scrollbar_size;
+  Nk_vec2 min_size;
+  Nk_vec2 padding;
+  Nk_vec2 group_padding;
+  Nk_vec2 popup_padding;
+  Nk_vec2 combo_padding;
+  Nk_vec2 contextual_padding;
+  Nk_vec2 menu_padding;
+  Nk_vec2 tooltip_padding;
+  Nk_tooltip_pos tooltip_origin;
+  Nk_vec2 tooltip_offset;
+    float tooltip_delay;
+}
+
+struct Nk_style_slider {
+  Nk_style_item normal;
+  Nk_style_item hover;
+  Nk_style_item active;
+  Nk_color border_color;
+  Nk_color bar_normal;
+  Nk_color bar_hover;
+  Nk_color bar_active;
+  Nk_color bar_filled;
+  Nk_style_item cursor_normal;
+  Nk_style_item cursor_hover;
+  Nk_style_item cursor_active;
+  float border;
+  float rounding;
+  float bar_height;
+  Nk_vec2 padding;
+  Nk_vec2 spacing;
+  Nk_vec2 cursor_size;
+  float color_factor;
+  float disabled_factor;
+  CInt show_buttons;
+  Nk_style_button inc_button;
+  Nk_style_button dec_button;
+  Nk_symbol_type inc_symbol;
+  Nk_symbol_type dec_symbol;
+  Nk_handle userdata;
+  void* draw_begin;
+  void* draw_end;
+}
+
+struct Nk_style_button {
+  Nk_style_item normal;
+  Nk_style_item hover;
+  Nk_style_item active;
+  Nk_color border_color;
+  float color_factor_background;
+  Nk_color text_background;
+  Nk_color text_normal;
+  Nk_color text_hover;
+  Nk_color text_active;
+  Nk_flags text_alignment;
+  float color_factor_text;
+  float border;
+  float rounding;
+  Nk_vec2 padding;
+  Nk_vec2 image_padding;
+  Nk_vec2 touch_padding;
+  float disabled_factor;
+  Nk_handle userdata;
+  void* draw_begin;
+  void* draw_end;
+}
+
+extern fn Nk_bool nk_style_pop_color(
+  Nk_context*)
+@cname("nk_style_pop_color");
+
+extern fn Nk_bool nk_style_push_style_item(
+  Nk_context* ctx,
+  Nk_style_item* address,
+  Nk_style_item value)
+@cname("nk_style_push_style_item");
+
+extern fn Nk_bool nk_style_pop_color(
+  Nk_context* ctx)
+@cname("nk_style_pop_color");
+
+extern fn Nk_bool nk_style_pop_style_item(
+  Nk_context*)
+@cname("nk_style_pop_style_item");
+
+extern fn Nk_style_item nk_style_item_color(
+  Nk_color)
+@cname("nk_style_item_color");
+
+extern fn Nk_vec2 nk_vec2(
+  float x,
+  float y)
+@cname("nk_vec2");
+
+constdef Nk_style_item_type : CUInt {
+  NK_STYLE_ITEM_COLOR = 0,
+  NK_STYLE_ITEM_IMAGE = 1,
+  NK_STYLE_ITEM_NINE_SLICE = 2
+}
+
+struct Nk_style_item {
+  Nk_style_item_type type;
+  Nk_style_item_data data;
+}
+
+union Nk_style_item_data {
+  Nk_color color;
+  Nk_image image;
+  Nk_nine_slice slice;
+}
+
+struct Nk_nine_slice {
+  Nk_image img;
+  Nk_ushort l;
+  Nk_ushort t;
+  Nk_ushort r;
+  Nk_ushort b;
+}
+
+union Nk_handle {
+  void* ptr;
+  CInt id;
+}
+
+
+alias Nk_ushort = CUShort;
+
+struct Nk_image {
+  Nk_handle handle;
+  Nk_ushort w;
+  Nk_ushort h;
+  Nk_ushort[4] region;
+}
 
 extern fn Nk_context* nk_sdl_init(SDL_Window* win) @cname("nk_sdl_init");
 struct Nk_font_atlas{
@@ -139,6 +369,40 @@ struct Nk_font_atlas{
 extern fn CInt nk_sdl_font_stash_begin(Nk_font_atlas** atlas) @cname("nk_sdl_font_stash_begin");
 extern fn CInt nk_sdl_font_stash_end() @cname("nk_sdl_font_stash_end");
 extern fn void nk_input_begin(Nk_context* ctx) @cname("nk_input_begin");
+
+enum Nk_layout_format {
+  NK_DYNAMIC, NK_STATIC
+}
+
+
+extern fn void nk_layout_row_begin(
+  Nk_context* ctx,
+  Nk_layout_format fmt,
+  float row_height,
+  CInt cols)
+@cname("nk_layout_row_begin");
+
+extern fn void nk_layout_row_push(
+  Nk_context* ctx,
+  float ratio_or_width)
+@cname("nk_layout_row_push");
+
+
+extern fn Nk_color nk_rgb(
+  CInt r,
+  CInt g,
+  CInt b)
+@cname("nk_rgb");
+
+extern fn Nk_bool nk_style_push_color(
+  Nk_context* ctx,
+  Nk_color* address,
+  Nk_color value)
+@cname("nk_style_push_color");
+
+extern fn void nk_layout_row_end(
+  Nk_context* ctx)
+@cname("nk_layout_row_end");
 
 // struct SDL_CommonEvent {
 //   uint type;

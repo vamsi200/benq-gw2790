@@ -44,7 +44,7 @@ struct MonitorState {
     DisplayMode display_mode;
     ColorTemperature color_temperature;
     UserDefine user_define_color;
-    // int volume;
+    uint volume;
     // 
     // bool muted;
     // 
@@ -134,7 +134,7 @@ struct VcpValue {
         String enum_val;
         EnumValue color_val;
         bool bool_val;
-        ushort raw_val;
+        uint raw_val;
     }
 }
 
@@ -217,6 +217,18 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
         vcp_info.value = vcp_val;
     }
 
+    if (line.contains("0x62")) {
+        vcp_val.kind = VcpKind.RAW;
+        vcp_info.code = code;
+        long? idx  = line.rindex_of(":");
+        long? idx1 = line.rindex_of("(");
+        if (catch idx) vcp_val.data.raw_val = 0;
+        if (catch idx1) vcp_val.data.raw_val = 0;
+        vcp_val.data.raw_val = line[idx + 1..idx1 - 1]!.trim().to_char()!;
+        vcp_info.name = "Volume";
+        vcp_info.value = vcp_val;
+    }
+
     return vcp_info;
 }
 
@@ -238,6 +250,7 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
         VcpInfo contrast     = get_vcp(CONTRAST, "2")!!;
         VcpInfo display_mode = get_vcp(DISPLAY_MODE, "2")!!;
         VcpInfo color_preset = get_vcp(SELECT_COLOR_PRESET, "2")!!;
+        VcpInfo volume       = get_vcp(AUDIO_SPEAKER_VOLUME, "2")!!;
 
         ms.color_temperature = color_preset.value.data.color_val.preset;
         ms.brightness = brightness.value.data.range_val[0];
@@ -248,6 +261,8 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
 
         ms.display_mode = convert_da_thing(display_mode.value.data.enum_val);
         ms.user_define_color = color_preset.value.data.color_val.rgb;
+
+        ms.volume = volume.value.data.raw_val;
 
         if (@ok(monitor_state_channel.push(ms))) return true;
         return false;
@@ -456,6 +471,7 @@ constdef CommandType : uint {
     SET_COLOR_MODE,
     SET_CONTRAST,
     SET_COLOR_PRESET,
+    SET_VOLUME,
     SET_RED_GAIN,
     SET_GREEN_GAIN,
     SET_BLUE_GAIN,
@@ -466,6 +482,7 @@ union CommandValue {
     DisplayMode mode;
     uint contrast;
     uint val;
+    uint volume;
     ColorTemperature color_temp;
 }
 
@@ -512,7 +529,7 @@ fn void gui_thing(GuiArgs* args) {
 
         uint brightness, max_brightness, contrast, max_contrast;
         DisplayMode display_code;
-        float brightness_slider_val, brightness_max_value, constrast_slider_val, constrast_max_value;
+        float brightness_slider_val, brightness_max_value, constrast_slider_val, constrast_max_value, volume_slider_val;
         int running = 1;
         ColorTemperature color_code;
         float red, green, blue;
@@ -535,228 +552,380 @@ fn void gui_thing(GuiArgs* args) {
         };
 
         while (running) {
-            if (!state_received) {
-                MonitorState? ms = args.monitor_state_channel.try_pop();
-                if (@ok(ms)) {
-                    brightness_slider_val = (float)(ms.brightness)!! / 100;
-                    brightness_max_value = (float)(ms.max_brightness)!! / 100;
-                    constrast_slider_val = (float)(ms.contrast)!! / 100;
-                    constrast_max_value = (float)(ms.max_contrast)!! / 100;
-                    color_code = ms.color_temperature!!;
-                    display_code = ms.display_mode!!;
-                    red = (float)(ms.user_define_color.r)!! / 100;
-                    green = (float)(ms.user_define_color.g)!! / 100;
-                    blue = (float)(ms.user_define_color.b)!! / 100;
-                    io::printn(red);
-                    io::printn(green);
-                    io::printn(blue);
 
-                    state_received = true;
+            {
+                if (!state_received) {
+                    MonitorState? ms = args.monitor_state_channel.try_pop();
+                    if (@ok(ms)) {
+                        brightness_slider_val = (float)(ms.brightness)!! / 100;
+                        brightness_max_value = (float)(ms.max_brightness)!! / 100;
+                        constrast_slider_val = (float)(ms.contrast)!! / 100;
+                        constrast_max_value = (float)(ms.max_contrast)!! / 100;
+                        color_code = ms.color_temperature!!;
+                        display_code = ms.display_mode!!;
+                        red = (float)(ms.user_define_color.r)!! / 100;
+                        green = (float)(ms.user_define_color.g)!! / 100;
+                        blue = (float)(ms.user_define_color.b)!! / 100;
+                        volume_slider_val = (float)(ms.volume)!! / 100;
+                        state_received = true;
+                    }
                 }
-            }
-            nuklear::SDL_Event evt;
-            nuklear::nk_input_begin(ctx);
-            while (nuklear::sdl_pollevent(&evt)) {
-                if (evt.type == SDL_QUIT) running = 0;
-                nuklear::nk_sdl_handle_event(&evt);
-            }
-            if (state_received) {
-                nuklear::nk_input_end(ctx);
-                int w, h;
-                nuklear::sdl_getwindowsize(win, &w, &h);
+                nuklear::SDL_Event evt;
+                nuklear::nk_input_begin(ctx);
+                while (nuklear::sdl_pollevent(&evt)) {
+                    if (evt.type == SDL_QUIT) running = 0;
+                    nuklear::nk_sdl_handle_event(&evt);
+                }
+                if (state_received) {
+                    nuklear::nk_input_end(ctx);
+                    int w, h;
+                    nuklear::sdl_getwindowsize(win, &w, &h);
 
-                if (nuklear::nk_begin(
-                    ctx,
-                    "Main",
-                    nuklear::nk_rect(0, 0, w, h),
-                    (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
-                )) {
-                    nuklear::nk_layout_row_dynamic(ctx, 30, 3);
-                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                    nuklear::nk_label(ctx, "Brightness", (uint)Nk_text_alignment.NK_TEXT_LEFT);
-                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                    if (nuklear::nk_slider_float(
+                    if (nuklear::nk_begin(
                         ctx,
-                        0.0f,
-                        &&brightness_slider_val,
-                        brightness_max_value,
-                        0.01f
+                        "Main",
+                        nuklear::nk_rect(0, 0, w, h),
+                        (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
                     )) {
-                        if (@ok(
-                            bc.try_push(
-                                {
-                                    .type = CommandType.SET_BRIGHTNESS,
-                                    .value = {
-                                        .brightness = (uint)(brightness_slider_val * 100.f)
-                                    },
-                                }
-                            )
-                        )) io::printn("sent");
-                    }
+                        // Sliders
 
-                    nuklear::nk_layout_row_dynamic(ctx, 30, 3);
-                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                    nuklear::nk_label(ctx, "Constrast", (uint)Nk_text_alignment.NK_TEXT_LEFT);
-                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                    if (nuklear::nk_slider_float(
-                        ctx,
-                        0.0f,
-                        &&constrast_slider_val,
-                        constrast_max_value,
-                        0.01f
-                    )) {
-                        if (@ok(
-                            bc.try_push(
-                                {
-                                    .type = CommandType.SET_CONTRAST,
-                                    .value = { .contrast = (uint)(constrast_slider_val * 100.f) },
-                                }
-                            )
-                        )) io::printn("sent");
-                    }
+                        // Gruvbox Theme
 
-                    nuklear::nk_label(ctx, "Display Mode", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+                        // Window
+                        ctx.style.window.background = nuklear::nk_rgb(40, 40, 40); // bg0
+                        ctx.style.window.fixed_background = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(40, 40, 40)
+                        );
+                        ctx.style.window.border_color = nuklear::nk_rgb(60, 56, 54); // bg1
+                        ctx.style.window.popup_border_color = nuklear::nk_rgb(60, 56, 54);
+                        ctx.style.window.combo_border_color = nuklear::nk_rgb(60, 56, 54);
+                        ctx.style.window.contextual_border_color = nuklear::nk_rgb(60, 56, 54);
+                        ctx.style.window.menu_border_color = nuklear::nk_rgb(60, 56, 54);
+                        ctx.style.window.group_border_color = nuklear::nk_rgb(60, 56, 54);
+                        ctx.style.window.tooltip_border_color = nuklear::nk_rgb(60, 56, 54);
+                        ctx.style.window.border = 1;
+                        ctx.style.window.combo_border = 1;
+                        ctx.style.window.contextual_border = 1;
+                        ctx.style.window.menu_border = 1;
+                        ctx.style.window.group_border = 1;
+                        ctx.style.window.tooltip_border = 1;
+                        ctx.style.window.popup_border = 1;
+                        ctx.style.window.rounding = 2;
+                        ctx.style.window.padding = nuklear::nk_vec2(12, 12);
+                        ctx.style.window.spacing = nuklear::nk_vec2(6, 6);
 
-                    nuklear::nk_layout_row_dynamic(ctx, 28, 1);
+                        // Window header
+                        ctx.style.window.header.normal = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(50, 48, 47)
+                        ); // bg0_h
+                        ctx.style.window.header.hover = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(50, 48, 47)
+                        );
+                        ctx.style.window.header.active = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(50, 48, 47)
+                        );
+                        ctx.style.window.header.label_normal = nuklear::nk_rgb(
+                            235,
+                            219,
+                            178
+                        ); // fg1
+                        ctx.style.window.header.label_hover = nuklear::nk_rgb(
+                            250,
+                            189,
+                            47
+                        ); // yellow
+                        ctx.style.window.header.label_active = nuklear::nk_rgb(250, 189, 47);
+                        ctx.style.window.header.padding = nuklear::nk_vec2(4, 4);
+                        ctx.style.window.header.label_padding = nuklear::nk_vec2(4, 4);
+                        ctx.style.window.header.spacing = nuklear::nk_vec2(2, 2);
 
-                    foreach (DisplayModes dm : display_modes) {
-                        Nk_symbol_type symbol = dm.mode
-                            == display_code ? Nk_symbol_type
-                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type.NK_SYMBOL_CIRCLE_OUTLINE;
+                        // Buttons
+                        ctx.style.button.normal = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(60, 56, 54)
+                        ); // bg1
+                        ctx.style.button.hover = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(80, 73, 69)
+                        ); // bg2
+                        ctx.style.button.active = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(214, 93, 14)
+                        ); // orange
+                        ctx.style.button.border_color = nuklear::nk_rgb(40, 40, 40);
+                        ctx.style.button.text_background = nuklear::nk_rgb(60, 56, 54);
+                        ctx.style.button.text_normal = nuklear::nk_rgb(235, 219, 178); // fg1
+                        ctx.style.button.text_hover = nuklear::nk_rgb(250, 189, 47); // yellow
+                        ctx.style.button.text_active = nuklear::nk_rgb(
+                            29,
+                            32,
+                            33
+                        ); // bg0_h
+                        ctx.style.button.border = 1;
+                        ctx.style.button.rounding = 2;
+                        ctx.style.button.padding = nuklear::nk_vec2(6, 4);
 
-                        if (nuklear::nk_button_symbol_label(
+                        // Sliders
+                        ctx.style.slider.normal = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(50, 48, 47)
+                        );
+                        ctx.style.slider.hover = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(50, 48, 47)
+                        );
+                        ctx.style.slider.active = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(50, 48, 47)
+                        );
+                        ctx.style.slider.bar_normal = nuklear::nk_rgb(80, 73, 69);
+                        ctx.style.slider.bar_hover = nuklear::nk_rgb(80, 73, 69);
+                        ctx.style.slider.bar_active = nuklear::nk_rgb(80, 73, 69);
+                        ctx.style.slider.bar_filled = nuklear::nk_rgb(214, 93, 14); // orange fill
+                        ctx.style.slider.cursor_normal = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(250, 189, 47)
+                        ); // yellow knob
+                        ctx.style.slider.cursor_hover = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(254, 128, 25)
+                        );
+                        ctx.style.slider.cursor_active = nuklear::nk_style_item_color(
+                            nuklear::nk_rgb(250, 189, 47)
+                        );
+                        ctx.style.slider.border_color = nuklear::nk_rgb(40, 40, 40);
+                        ctx.style.slider.padding = nuklear::nk_vec2(0, 0);
+                        ctx.style.slider.border = 1;
+                        ctx.style.slider.rounding = 2;
+                        ctx.style.slider.bar_height = 5;
+
+
+                        nuklear::nk_layout_row_dynamic(ctx, 8, 1);
+
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        nuklear::nk_label(ctx, "Brightness", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+
+                        if (nuklear::nk_slider_float(
                             ctx,
-                            symbol,
-                            dm.name,
-                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                            0.0f,
+                            &&brightness_slider_val,
+                            brightness_max_value,
+                            0.01f
                         )) {
-                            if (dm.mode != display_code) {
-                                display_code = dm.mode;
-                                if (@ok(
-                                    bc.try_push(
-                                        {
-                                            .type = CommandType.SET_COLOR_MODE,
-                                            .value = { .mode = display_code },
-                                        }
-                                    )
-                                )) io::printn("sent");
-                            }
+                            if (@ok(
+                                bc.try_push(
+                                    {
+                                        .type = CommandType.SET_BRIGHTNESS,
+                                        .value = {
+                                            .brightness = (uint)(brightness_slider_val * 100.f)
+                                        },
+                                    }
+                                )
+                            )) io::printn("sent");
                         }
-                    }
-                    nuklear::nk_label(ctx, "Color Preset", (uint)Nk_text_alignment.NK_TEXT_LEFT);
-                    nuklear::nk_layout_row_dynamic(ctx, 28, 1);
 
+                        nuklear::nk_layout_row_dynamic(ctx, 8, 1);
+                        nuklear::nk_spacing(ctx, 1);
 
-                    foreach (TemperatureModes tm : temp_modes) {
-                        Nk_symbol_type symbol = tm.mode
-                            == color_code ? Nk_symbol_type
-                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type.NK_SYMBOL_CIRCLE_OUTLINE;
-
-                        if (nuklear::nk_button_symbol_label(
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        nuklear::nk_label(ctx, "Contrast", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        if (nuklear::nk_slider_float(
                             ctx,
-                            symbol,
-                            tm.name,
-                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                            0.0f,
+                            &&constrast_slider_val,
+                            constrast_max_value,
+                            0.01f
                         )) {
-                            if (tm.mode != color_code) {
-                                color_code = tm.mode;
-                                if (color_code != ColorTemperature.USER_DEFINE) {
+                            if (@ok(
+                                bc.try_push(
+                                    {
+                                        .type = CommandType.SET_CONTRAST,
+                                        .value = {
+                                            .contrast = (uint)(constrast_slider_val * 100.f)
+                                        },
+                                    }
+                                )
+                            )) io::printn("sent");
+                        }
+
+                        nuklear::nk_layout_row_dynamic(ctx, 8, 1);
+                        nuklear::nk_spacing(ctx, 1);
+
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        nuklear::nk_label(ctx, "Volume", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        if (nuklear::nk_slider_float(ctx, 0.0f, &&volume_slider_val, 1.0f, 0.01f)) {
+                            if (@ok(
+                                bc.try_push(
+                                    {
+                                        .type = CommandType.SET_VOLUME,
+                                        .value = { .volume = (uint)(volume_slider_val * 100.f) },
+                                    }
+                                )
+                            )) io::printn("sent");
+                        }
+
+                        nuklear::nk_layout_row_dynamic(ctx, 15, 1);
+                        nuklear::nk_spacing(ctx, 1);
+
+                        // Display Mode
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        nuklear::nk_label(
+                            ctx,
+                            "Display Mode",
+                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                        );
+
+                        nuklear::nk_layout_row_dynamic(ctx, 28, 2);
+
+                        foreach (DisplayModes dm : display_modes) {
+                            Nk_symbol_type symbol = dm.mode
+                                == display_code ? Nk_symbol_type
+                                    .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
+                                        .NK_SYMBOL_CIRCLE_OUTLINE;
+
+                            if (nuklear::nk_button_symbol_label(
+                                ctx,
+                                symbol,
+                                dm.name,
+                                (uint)Nk_text_alignment.NK_TEXT_LEFT
+                            )) {
+                                if (dm.mode != display_code) {
+                                    display_code = dm.mode;
                                     if (@ok(
                                         bc.try_push(
                                             {
-                                                .type = CommandType.SET_COLOR_PRESET,
-                                                .value = { .color_temp = color_code },
+                                                .type = CommandType.SET_COLOR_MODE,
+                                                .value = { .mode = display_code },
                                             }
                                         )
                                     )) io::printn("sent");
                                 }
                             }
                         }
-                    }
 
-                    if (color_code == ColorTemperature.USER_DEFINE) {
-                        nuklear::nk_layout_row_dynamic(ctx, 10, 1);
+                        nuklear::nk_layout_row_dynamic(ctx, 15, 1);
                         nuklear::nk_spacing(ctx, 1);
 
-                        nuklear::nk_layout_row_dynamic(ctx, 20, 1);
-                        nuklear::nk_label(ctx, "RGB Gains", (uint)Nk_text_alignment.NK_TEXT_LEFT);
-
+                        // Color Preset
                         nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        nuklear::nk_label(
+                            ctx,
+                            "Color Preset",
+                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                        );
+                        nuklear::nk_layout_row_dynamic(ctx, 28, 2);
 
-                        if (nuklear::nk_slider_float(ctx, 0.0f, &red, 100, 0.01f)) {
-                            if (@ok(
-                                bc.try_push(
-                                    {
-                                        .type = CommandType.SET_RED_GAIN,
-                                        .value = { .val = (uint)(red * 100.0f) }
-                                    }
-                                )
-                            ));}
+                        foreach (TemperatureModes tm : temp_modes) {
+                            Nk_symbol_type symbol = tm.mode
+                                == color_code ? Nk_symbol_type
+                                    .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
+                                        .NK_SYMBOL_CIRCLE_OUTLINE;
 
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        if (nuklear::nk_slider_float(ctx, 0.0f, &green, 100, 0.01f)) {
-                            if (@ok(
-                                bc.try_push(
-                                    {
-                                        .type = CommandType.SET_GREEN_GAIN,
-                                        .value = { .val = (uint)(green * 100.0f), }
+                            if (nuklear::nk_button_symbol_label(
+                                ctx,
+                                symbol,
+                                tm.name,
+                                (uint)Nk_text_alignment.NK_TEXT_LEFT
+                            )) {
+                                if (tm.mode != color_code) {
+                                    color_code = tm.mode;
+                                    if (color_code != ColorTemperature.USER_DEFINE) {
+                                        if (@ok(
+                                            bc.try_push(
+                                                {
+                                                    .type = CommandType.SET_COLOR_PRESET,
+                                                    .value = { .color_temp = color_code },
+                                                }
+                                            )
+                                        )) io::printn("sent");
                                     }
-                                )
-                            ));}
+                                }
+                            }
+                        }
 
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        if (nuklear::nk_slider_float(ctx, 0.0f, &blue, 100, 0.01f)) {
-                            if (@ok(
-                                bc.try_push(
-                                    {
-                                        .type = CommandType.SET_BLUE_GAIN,
-                                        .value = { .val = (uint)(blue * 100.0f) }
-                                    }
-                                )
-                            ));}
+                        if (color_code == ColorTemperature.USER_DEFINE) {
+                            nuklear::nk_layout_row_dynamic(ctx, 15, 1);
+                            nuklear::nk_spacing(ctx, 1);
+
+                            nuklear::nk_layout_row_dynamic(ctx, 20, 1);
+                            nuklear::nk_label(
+                                ctx,
+                                "RGB Gains",
+                                (uint)Nk_text_alignment.NK_TEXT_LEFT
+                            );
+
+                            nuklear::nk_layout_row_dynamic(ctx, 6, 1);
+                            nuklear::nk_spacing(ctx, 1);
+
+                            nuklear::nk_layout_row_dynamic(ctx, 22, 1);
+                            if (nuklear::nk_slider_float(ctx, 0.0f, &red, 100, 0.01f)) {
+                                if (@ok(
+                                    bc.try_push(
+                                        {
+                                            .type = CommandType.SET_RED_GAIN,
+                                            .value = { .val = (uint)(red * 100.0f) }
+                                        }
+                                    )
+                                ));}
+
+                            nuklear::nk_layout_row_dynamic(ctx, 22, 1);
+                            if (nuklear::nk_slider_float(ctx, 0.0f, &green, 100, 0.01f)) {
+                                if (@ok(
+                                    bc.try_push(
+                                        {
+                                            .type = CommandType.SET_GREEN_GAIN,
+                                            .value = { .val = (uint)(green * 100.0f), }
+                                        }
+                                    )
+                                ));}
+
+                            nuklear::nk_layout_row_dynamic(ctx, 22, 1);
+                            if (nuklear::nk_slider_float(ctx, 0.0f, &blue, 100, 0.01f)) {
+                                if (@ok(
+                                    bc.try_push(
+                                        {
+                                            .type = CommandType.SET_BLUE_GAIN,
+                                            .value = { .val = (uint)(blue * 100.0f) }
+                                        }
+                                    )
+                                ));}
+                        }
                     }
-                }
 
-                nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-
-                nuklear::nk_end(ctx);
-
-                nuklear::glViewport(0, 0, w, h);
-                nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
-                nuklear::glClear(GL_COLOR_BUFFER_BIT);
-                nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
-                nuklear::sdl_gl_swapwindow(win);
-            } else {
-                int w, h;
-                nuklear::sdl_getwindowsize(win, &w, &h);
-                Nk_rect bounds = nuklear::nk_rect(0, 0, 300, 100);
-                bounds.x = (w - bounds.w) / 2.0f;
-                bounds.y = (h - bounds.h) / 2.0f;
-                if (nuklear::nk_begin(
-                    ctx,
-                    "Loading",
-                    bounds,
-                    (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
-                )) {
-                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                    nuklear::nk_label(
-                        ctx,
-                        "Getting monitor information...",
-                        (uint)Nk_text_alignment.NK_TEXT_CENTERED
-                    );
-
-                    nuklear::nk_layout_row_dynamic(ctx, 20, 1);
-                    nuklear::nk_label(
-                        ctx,
-                        "Please wait...",
-                        (uint)Nk_text_alignment.NK_TEXT_CENTERED
-                    );
                     nuklear::nk_end(ctx);
+
                     nuklear::glViewport(0, 0, w, h);
                     nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
                     nuklear::glClear(GL_COLOR_BUFFER_BIT);
                     nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
                     nuklear::sdl_gl_swapwindow(win);
+                } else {
+                    int w, h;
+                    nuklear::sdl_getwindowsize(win, &w, &h);
+                    Nk_rect bounds = nuklear::nk_rect(0, 0, 300, 100);
+                    bounds.x = (w - bounds.w) / 2.0f;
+                    bounds.y = (h - bounds.h) / 2.0f;
+                    if (nuklear::nk_begin(
+                        ctx,
+                        "Loading",
+                        bounds,
+                        (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
+                    )) {
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        nuklear::nk_label(
+                            ctx,
+                            "Getting monitor information...",
+                            (uint)Nk_text_alignment.NK_TEXT_CENTERED
+                        );
+
+                        nuklear::nk_layout_row_dynamic(ctx, 20, 1);
+                        nuklear::nk_label(
+                            ctx,
+                            "Please wait...",
+                            (uint)Nk_text_alignment.NK_TEXT_CENTERED
+                        );
+                        nuklear::nk_end(ctx);
+                        nuklear::glViewport(0, 0, w, h);
+                        nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
+                        nuklear::glClear(GL_COLOR_BUFFER_BIT);
+                        nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
+                        nuklear::sdl_gl_swapwindow(win);
+                    }
                 }
             }
         }
@@ -780,6 +949,7 @@ fn void change_stuff(BufferedChannel{MonitorCommand}* bc) {
             uint red_value   = cmd.value.val;
             uint green_value = cmd.value.val;
             uint blue_value  = cmd.value.val;
+            uint volume      = cmd.value.volume;
 
             thread::sleep_ms(80);
 
@@ -831,6 +1001,13 @@ fn void change_stuff(BufferedChannel{MonitorCommand}* bc) {
                     }
                     set_vcp("2", blue_value, VIDEO_GAIN_BLUE);
 
+                case CommandType.SET_VOLUME:
+                    for (;;) {
+                        MonitorCommand? next = bc.try_pop();
+                        if (catch next) break;
+                        if (next.type == CommandType.SET_VOLUME) volume = next.value.volume;
+                    }
+                    set_vcp("2", volume, AUDIO_SPEAKER_VOLUME);
                 default:
             }
         }
@@ -843,11 +1020,21 @@ struct GuiArgs {
 }
 
 fn int main(String[] args) {
-    // VcpInfo color_preset = get_vcp(SELECT_COLOR_PRESET, "2")!!;
-    // io::printn(color_preset.value.data.color_val.rgb);
+    // VcpInfo s = get_vcp(AUDIO_SPEAKER_VOLUME, "2")!!;
+
+    // io::printn(s);
+
     // io::printn(color_preset);
+
     // UserDefine ud = get_user_define_vals();
+
     // io::printn(ud);
+
+
+    // io::printn(Nk_style_slider::size);
+    // io::printn(Nk_style_button::size);
+    // io::printn(Nk_style::size);
+    // io::printn(Nk_context::size);
 
     Thread tg, tb, ts;
     GuiArgs ga = { };
