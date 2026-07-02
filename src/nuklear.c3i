@@ -108,6 +108,19 @@ const uint SDL_WINDOWPOS_UNDEFINED_MASK = 0x1FFF0000;
 const uint SDL_WINDOWPOS_CENTERED_MASK  = 0x2FFF0000;
 const uint SDL_WINDOWPOS_CENTERED = 0x2FFF0000;
 
+extern fn Nk_bool nk_selectable_label(
+  Nk_context* ctx,
+  CChar* str,
+  Nk_flags align,
+  Nk_bool* value)
+@cname("nk_selectable_label");
+
+extern fn Nk_bool nk_option_label(
+  Nk_context*,
+  CChar*,
+  Nk_bool active)
+@cname("nk_option_label");
+
 extern fn int sdl_gl_setattribute(SDL_GLattr attr, int value) @cname("SDL_GL_SetAttribute");
 extern fn SDL_Window* sdl_createwindow(
   CChar* title,
@@ -880,7 +893,12 @@ alias NkTextEdit = void;
 alias NkRune = uint;
 
 extern fn Nk_bool nk_filter_default(NkTextEdit* box, NkRune unicode);
-
+extern fn void nk_widget_disable_begin(
+  Nk_context* ctx)
+@cname("nk_widget_disable_begin");
+extern fn void nk_widget_disable_end(
+  Nk_context* ctx)
+@cname("nk_widget_disable_end");
 extern fn Nk_rect nk_window_get_bounds(Nk_context* ctx) @cname("nk_window_get_bounds");
 extern fn Nk_vec2 nk_window_get_position(Nk_context* ctx) @cname("nk_window_get_position");
 extern fn Nk_vec2 nk_window_get_size(Nk_context* ctx) @cname("nk_window_get_size");
@@ -918,10 +936,15 @@ extern fn Nk_flags nk_edit_string(
 //   CChar* title)
 // @cname("nk_button_label_styled");
 
+extern fn Nk_bool nk_button_label(
+  Nk_context* ctx,
+  CChar* title)
+@cname("nk_button_label");
+
 extern fn Nk_bool nk_button_symbol_label(
   Nk_context*,
   Nk_symbol_type,
-  String,
+  CChar*,
  Nk_flags text_alignment)
 @cname("nk_button_symbol_label");
 

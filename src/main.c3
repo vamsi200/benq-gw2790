@@ -55,23 +55,23 @@ struct MonitorState {
     uint max_contrast;
     DisplayMode display_mode;
     ColorTemperature color_temperature;
-    UserDefine user_define_color;
+    // UserDefine user_define_color;
     uint volume;
     LowBlueLightPlus low_blue_light_plus;
     uint audio_mute;
-    // 
-    // bool muted;
-    // 
+    uint bi_gen2;
+    uint ama;
+    uint sharpness;
     // InputSource input;
     // 
     // ColorGain gain;
 }
 
-struct UserDefine {
-    uint r;
-    uint g;
-    uint b;
-}
+// struct UserDefine {
+//     uint r;
+//     uint g;
+//     uint b;
+// }
 
 const COLOR_TEMPERATURE_REQUEST = "0x0c";
 // Well this ain't working, we have to write to 0x0c, values are:
@@ -86,6 +86,10 @@ const COLOR_TEMPERATURE_REQUEST = "0x0c";
 
 // 35 * (r,g,b) - UserDefine - 0x0b
 
+// Off - 0x00
+// High - 0x01
+// Premium - 0x02
+const AMA = "0xf0";
 
 constdef ColorTemperature : uint {
     NORMAL      = 35,
@@ -94,42 +98,17 @@ constdef ColorTemperature : uint {
     USER_DEFINE = 11,
 }
 
-enum AudioScenario {
-    STANDARD,
-    MUSIC,
-    DIALOGUE
-}
+// enum AudioScenario {
+//     STANDARD,
+//     MUSIC,
+//     DIALOGUE
+// }
 
 enum EyeReminder {
     OFF,
     THIRTY_MIN,
     FORTYFIVE_MIN,
     SIXTRY_MIN
-}
-
-struct MonitorSettings {
-    // Display
-    int brightness;
-    int contrast;
-    int sharpness;
-
-    // Input
-    InputSource input;
-
-    // Color
-    DisplayMode color_mode;
-    ColorTemperature color_temp;
-    // Gamma gamma;
-
-    // Audio
-    int volume;
-    bool mute;
-    AudioScenario audio_scenario;
-
-    // Eye Care
-    bool bi_gen2;
-    // LowBlueLightPlus low_blue_light_plus;
-    EyeReminder eye_reminder;
 }
 
 enum VcpKind {
@@ -155,12 +134,10 @@ struct VcpValue {
 
 struct EnumValue {
     ColorTemperature preset;
-    UserDefine rgb;
 }
 
 struct VcpInfo {
     String code;
-    String name;
     VcpValue value;
 }
 
@@ -183,10 +160,6 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
         long? idx1 = line.index_of("(")!;
         long? idx2 = line.index_of(")")!;
 
-        if (catch idx1) vcp_info.name = "unknown".copy(mem);
-        if (catch idx2) vcp_info.name = "unknown".copy(mem);
-
-        vcp_info.name = line[idx1 + 1..idx2 - 1]!.trim().copy(mem);
         vcp_val.kind = VcpKind.RANGE;
         vcp_info.code = code;
 
@@ -200,13 +173,9 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
         long? idx  = line.index_of("=")!;
         long? idx2 = line.rindex_of(")")!;
 
-        if (catch idx) vcp_info.name = "unknown".copy(mem);
-        if (catch idx2) vcp_info.name = "unknown".copy(mem);
-
         vcp_val.kind = VcpKind.ENUM_VAL;
         vcp_info.code = code;
         vcp_val.data.enum_val = line[idx + 1..idx2 - 1]!;
-        vcp_info.name = color_mode_to_string(convert_da_thing(vcp_val.data.enum_val));
         vcp_info.value = vcp_val;
     }
 
@@ -216,31 +185,35 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
 
         if (line.contains("6500")) {
             vcp_val.data.color_val.preset = NORMAL;
-            vcp_info.name = "Normal";
         } else if (line.contains("5000")) {
             vcp_val.data.color_val.preset = REDDISH;
-            vcp_info.name = "Reddish";
         } else if (line.contains("9300")) {
             vcp_val.data.color_val.preset = BLUISH;
-            vcp_info.name = "Bluish";
-        } else {
-            vcp_val.data.color_val.rgb = get_user_define_vals();
-            vcp_val.data.color_val.preset = USER_DEFINE;
-            vcp_info.name = "User Define";
         }
+        // else {
+        //     vcp_val.data.color_val.rgb = get_user_define_vals();
+        //     vcp_val.data.color_val.preset = USER_DEFINE;
+        //     vcp_info.name = "User Define";
+        // }
 
         vcp_info.value = vcp_val;
     }
 
     if (line.contains("0x62")) {
         vcp_val.kind = VcpKind.RAW;
+
         vcp_info.code = code;
-        long? idx  = line.rindex_of(":");
-        long? idx1 = line.rindex_of("(");
-        if (catch idx) vcp_val.data.raw_val = 0;
-        if (catch idx1) vcp_val.data.raw_val = 0;
-        vcp_val.data.raw_val = line[idx + 1..idx1 - 1]!.trim().to_char()!;
-        vcp_info.name = "Volume";
+
+        if (!line.contains("default")) {
+            long? idx  = line.rindex_of(":");
+            long? idx1 = line.rindex_of("(");
+            if (catch idx) vcp_val.data.raw_val = 0;
+            if (catch idx1) vcp_val.data.raw_val = 0;
+
+            vcp_val.data.raw_val = line[idx + 1..idx1 - 1]!.trim().to_char()!;
+        } else {
+            vcp_val.data.raw_val = 0;
+        }
         vcp_info.value = vcp_val;
     }
 
@@ -250,30 +223,46 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
         long? idx = line.rindex_of("=");
         if (catch idx) vcp_val.data.enum_val = "0";
         vcp_val.data.enum_val = line[idx + 1..]!.trim();
-        vcp_info.name = "Low Blue Light Plus";
         vcp_info.value = vcp_val;
     }
 
     if (line.contains("0x8d")) {
-          vcp_val.kind = VcpKind.RAW;
-          vcp_info.code = code;
-          String[] parts = line.tsplit(",");
-          vcp_val.data.raw_val = parts[0].tsplit("=")[1].strip_suffix(")").trim().to_uint()!;
-          vcp_info.name = "Audio Mute";
-          vcp_info.value = vcp_val;
+        vcp_val.kind = VcpKind.RAW;
+        vcp_info.code = code;
+        String[] parts = line.tsplit(",");
+        vcp_val.data.raw_val = parts[0].tsplit("=")[1].strip_suffix(")").trim().to_uint()!;
+        vcp_info.value = vcp_val;
+    }
+
+    if (line.contains("0xe2")) {
+        vcp_val.kind = VcpKind.RAW;
+        vcp_info.code = code;
+        long? idx = line.rindex_of("=");
+        if (catch idx) vcp_val.data.raw_val = 0;
+        vcp_val.data.raw_val = line[idx + 1..]!.trim().to_uint()!;
+        vcp_info.value = vcp_val;
+    }
+
+    if (line.contains("0xf0")) {
+        vcp_val.kind = VcpKind.RAW;
+        vcp_info.code = code;
+        long? idx = line.rindex_of("=");
+        if (catch idx) vcp_val.data.raw_val = 0;
+        vcp_val.data.raw_val = line[idx + 1..]!.trim().to_uint()!;
+        vcp_info.value = vcp_val;
     }
 
     return vcp_info;
 }
 
-fn UserDefine get_user_define_vals() {
-    UserDefine ud;
-    ud.r = get_vcp(VIDEO_GAIN_RED, "2").value.data.range_val[0]!!;
-    ud.g = get_vcp(VIDEO_GAIN_GREEN, "2").value.data.range_val[0]!!;
-    ud.b = get_vcp(VIDEO_GAIN_BLUE, "2").value.data.range_val[0]!!;
-
-    return ud;
-}
+// fn UserDefine get_user_define_vals() {
+//     UserDefine ud;
+//     ud.r = get_vcp(VIDEO_GAIN_RED, "2").value.data.range_val[0]!!;
+//     ud.g = get_vcp(VIDEO_GAIN_GREEN, "2").value.data.range_val[0]!!;
+//     ud.b = get_vcp(VIDEO_GAIN_BLUE, "2").value.data.range_val[0]!!;
+// 
+//     return ud;
+// }
 
 fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel) {
     LibcAllocator libc;
@@ -286,8 +275,14 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
         VcpInfo color_preset        = get_vcp(SELECT_COLOR_PRESET, "2")!!;
         VcpInfo volume              = get_vcp(AUDIO_SPEAKER_VOLUME, "2")!!;
         VcpInfo low_blue_light_plus = get_vcp(LOWBLUELIGHTPLUS, "2")!!;
-        VcpInfo audio_mute = get_vcp(AUDIO_MUTE, "2")!!;
+        VcpInfo audio_mute          = get_vcp(AUDIO_MUTE, "2")!!;
+        VcpInfo bi_gen2             = get_vcp(BIGEN2, "2")!!;
+        VcpInfo ama                 = get_vcp(AMA, "2")!!;
+        VcpInfo sharpness           = get_vcp(SHARPNESS, "2")!!;
 
+        ms.sharpness = sharpness.value.data.range_val[0];
+        ms.ama = ama.value.data.raw_val;
+        ms.bi_gen2 = bi_gen2.value.data.raw_val;
         ms.audio_mute = audio_mute.value.data.raw_val;
         ms.low_blue_light_plus = convert_lbl(low_blue_light_plus.value.data.enum_val);
         ms.color_temperature = color_preset.value.data.color_val.preset;
@@ -298,7 +293,7 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
         ms.max_contrast = contrast.value.data.range_val[1];
 
         ms.display_mode = convert_da_thing(display_mode.value.data.enum_val);
-        ms.user_define_color = color_preset.value.data.color_val.rgb;
+        // ms.user_define_color = color_preset.value.data.color_val.rgb;
 
         ms.volume = volume.value.data.raw_val;
 
@@ -412,7 +407,10 @@ const LOWBLUELIGHTPLUS = "0x19";
 const INPUT_SOURCE         = "0x60";
 const AUDIO_SPEAKER_VOLUME = "0x62";
 // Mute - sl=0x01, UnMute - sl=0x02
-const AUDIO_MUTE           = "0x8D";
+
+
+
+const AUDIO_MUTE = "0x8D";
 
 // Doesn't work :/
 // // 0x1c - Dialogue, 0x00 - Music, 0x21 - Standard
@@ -538,16 +536,29 @@ struct LowBlueLightPlusModes {
     LowBlueLightPlus mode;
 }
 
+struct GenericOne {
+    String name;
+    uint val;
+}
+
 constdef CommandType : uint {
     SET_BRIGHTNESS,
     SET_COLOR_MODE,
     SET_CONTRAST,
     SET_COLOR_PRESET,
     SET_VOLUME,
-    SET_RED_GAIN,
-    SET_GREEN_GAIN,
-    SET_BLUE_GAIN,
-    SET_LOW_BLUE_LIGHT_PLUS
+    // SET_RED_GAIN,
+
+
+    // SET_GREEN_GAIN,
+
+    // SET_BLUE_GAIN,
+
+    SET_LOW_BLUE_LIGHT_PLUS,
+    SET_AUDIO_MUTE,
+    SET_BI_GEN2,
+    SET_AMA,
+    SET_SHARPNESS
 }
 
 union CommandValue {
@@ -558,11 +569,54 @@ union CommandValue {
     uint val;
     uint volume;
     ColorTemperature color_temp;
+    uint audio_mute;
+    uint bi_gen2;
+    uint ama;
+    uint sharpness;
 }
 
 struct MonitorCommand {
     CommandType type;
     CommandValue value;
+}
+
+const float ROW_LABEL   = 22.0f;
+const float ROW_CONTROL = 25.0f;
+const float ROW_BUTTON  = 26.0f;
+const float SPACER_XS   = 8.0f;
+const float SPACER_SM   = 10.0f;
+const float SPACER_MD   = 14.0f;
+const float SPACER_LOAD = 20.0f;
+
+const float COL_LEFT_RATIO  = 0.58f;
+const float COL_RIGHT_RATIO = 0.42f;
+
+const float RGB_SLIDER_MAX  = 100.0f;
+const float RGB_SLIDER_STEP = 0.01f;
+
+const uint AUDIO_MUTE_VALUE = 0x01;
+const float TAB_HEIGHT      = 30.0f;
+
+enum GuiTab : int {
+    DISPLAY,
+    MODE,
+    AUDIO,
+}
+
+constdef Ama : uint {
+    OFF     = 0x00,
+    HIGH    = 0x01,
+    PREMIUM = 0x02,
+}
+
+struct AmaModes {
+    String name;
+    Ama mode;
+}
+
+struct GuiTabDef {
+    String name;
+    GuiTab tab;
 }
 
 fn void gui_thing(GuiArgs* args) {
@@ -603,13 +657,24 @@ fn void gui_thing(GuiArgs* args) {
 
         uint brightness, max_brightness, contrast, max_contrast;
         DisplayMode display_code;
-        float brightness_slider_val, brightness_max_value, constrast_slider_val, constrast_max_value, volume_slider_val;
-        int running = 1;
+        float brightness_slider_val, brightness_max_value;
+        float constrast_slider_val, constrast_max_value;
+        float volume_slider_val, sharpness_slider_val;
+        float sharpness_max_val = (float)10 / 100;
+        int running             = 1;
         ColorTemperature color_code;
         LowBlueLightPlus low_blue_light_plus_val;
         float red, green, blue;
+        uint audio_mute, bi_gen2;
+        bool state_received     = false;
+        GuiTab active_tab       = GuiTab.DISPLAY;
 
-        bool state_received = false;
+        GuiTabDef[] tab_defs = {
+            { "Display", GuiTab.DISPLAY },
+            { "Mode", GuiTab.MODE },
+            { "Audio", GuiTab.AUDIO },
+        };
+
         DisplayModes[] display_modes = {
             { "M-BOOK", DisplayMode.M_BOOK },
             { "Cinema", DisplayMode.CINEMA },
@@ -623,7 +688,6 @@ fn void gui_thing(GuiArgs* args) {
             { "Normal", ColorTemperature.NORMAL },
             { "Bluish", ColorTemperature.BLUISH },
             { "Reddish", ColorTemperature.REDDISH },
-            { "User Define", ColorTemperature.USER_DEFINE }
         };
 
         LowBlueLightPlusModes[] low_blue_light_plus_modes = {
@@ -631,9 +695,20 @@ fn void gui_thing(GuiArgs* args) {
             { "2", LowBlueLightPlus.VAL2 },
             { "3", LowBlueLightPlus.VAL3 },
             { "4", LowBlueLightPlus.VAL4 },
-            { "5", LowBlueLightPlus.VAL5 }
+            { "5", LowBlueLightPlus.VAL5 },
         };
 
+        GenericOne[] audio_mute_modes = { { "Mute", 0x01 }, { "UnMute", 0x02 }, };
+
+        GenericOne[] bi_gen_modes = { { "Off", 0x00 }, { "On", 0xff }, };
+
+        AmaModes[] ama_modes = {
+            { "Off", Ama.OFF },
+            { "High", Ama.HIGH },
+            { "Premium", Ama.PREMIUM }
+        };
+
+        Ama ama_mode;
         while (running) {
             if (!state_received) {
                 MonitorState? ms = args.monitor_state_channel.try_pop();
@@ -644,14 +719,19 @@ fn void gui_thing(GuiArgs* args) {
                     constrast_max_value = (float)(ms.max_contrast)!! / 100;
                     color_code = ms.color_temperature!!;
                     display_code = ms.display_mode!!;
-                    red = (float)(ms.user_define_color.r)!! / 100;
-                    green = (float)(ms.user_define_color.g)!! / 100;
-                    blue = (float)(ms.user_define_color.b)!! / 100;
+                    // red = (float)(ms.user_define_color.r)!! / 100;
+                    // green = (float)(ms.user_define_color.g)!! / 100;
+                    // blue = (float)(ms.user_define_color.b)!! / 100;
                     volume_slider_val = (float)(ms.volume)!! / 100;
                     low_blue_light_plus_val = ms.low_blue_light_plus!!;
+                    audio_mute = ms.audio_mute!!;
+                    bi_gen2 = ms.bi_gen2!!;
+                    ama_mode = (Ama)ms.ama!!;
+                    sharpness_slider_val = (float)ms.sharpness!! / 100;
                     state_received = true;
                 }
             }
+
             nuklear::SDL_Event evt;
             nuklear::nk_input_begin(ctx);
             while (nuklear::sdl_pollevent(&evt)) {
@@ -670,263 +750,511 @@ fn void gui_thing(GuiArgs* args) {
                     nuklear::nk_rect(0, 0, w, h),
                     (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
                 )) {
-                    nuklear::nk_layout_row_begin(
-                        ctx,
-                        Nk_layout_format.NK_DYNAMIC,
-                        (float)h - 24,
-                        2
-                    );
+                    // Tab strip
+                    nuklear::nk_layout_row_dynamic(ctx, TAB_HEIGHT, tab_defs.len);
+                    foreach (GuiTabDef td : tab_defs) {
+                        Nk_symbol_type symbol = td.tab
+                            == active_tab ? Nk_symbol_type
+                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type.NK_SYMBOL_CIRCLE_OUTLINE;
 
-                    nuklear::nk_layout_row_push(ctx, 0.58f);
-                    if (nuklear::nk_group_begin(
-                        ctx,
-                        "Display",
-                        (uint)Nk_panel_flags.NK_WINDOW_BORDER | (uint)Nk_panel_flags.NK_WINDOW_TITLE
-                    )) {
-                        nuklear::nk_layout_row_dynamic(ctx, 10, 1);
-                        nuklear::nk_spacing(ctx, 1);
 
-                        // Brightness
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        nuklear::nk_label(ctx, "Brightness", (uint)Nk_text_alignment.NK_TEXT_LEFT);
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        if (nuklear::nk_slider_float(
+                        if (nuklear::nk_button_symbol_label(
                             ctx,
-                            0.0f,
-                            &&brightness_slider_val,
-                            brightness_max_value,
-                            0.01f
-                        )) {
-                            if (@ok(
-                                bc.try_push(
-                                    {
-                                        .type = CommandType.SET_BRIGHTNESS,
-                                        .value = {
-                                            .brightness = (uint)(brightness_slider_val * 100.f)
-                                        },
-                                    }
-                                )
-                            )) io::printn("sent");
-                        }
-
-                        nuklear::nk_layout_row_dynamic(ctx, 14, 1);
-                        nuklear::nk_spacing(ctx, 1);
-
-                        // Contrast
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        nuklear::nk_label(ctx, "Contrast", (uint)Nk_text_alignment.NK_TEXT_LEFT);
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        if (nuklear::nk_slider_float(
-                            ctx,
-                            0.0f,
-                            &&constrast_slider_val,
-                            constrast_max_value,
-                            0.01f
-                        )) {
-                            if (@ok(
-                                bc.try_push(
-                                    {
-                                        .type = CommandType.SET_CONTRAST,
-                                        .value = {
-                                            .contrast = (uint)(constrast_slider_val * 100.f)
-                                        },
-                                    }
-                                )
-                            )) io::printn("sent");
-                        }
-
-                        nuklear::nk_layout_row_dynamic(ctx, 14, 1);
-                        nuklear::nk_spacing(ctx, 1);
-
-                        // Volume
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        nuklear::nk_label(ctx, "Volume", (uint)Nk_text_alignment.NK_TEXT_LEFT);
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        if (nuklear::nk_slider_float(ctx, 0.0f, &&volume_slider_val, 1.0f, 0.01f)) {
-                            if (@ok(
-                                bc.try_push(
-                                    {
-                                        .type = CommandType.SET_VOLUME,
-                                        .value = { .volume = (uint)(volume_slider_val * 100.f) },
-                                    }
-                                )
-                            )) io::printn("sent");
-                        }
-
-                        nuklear::nk_spacing(ctx, 1);
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        nuklear::nk_label(
-                            ctx,
-                            "Low Blue Light Plus",
+                            symbol,
+                            (CChar*)td.name,
                             (uint)Nk_text_alignment.NK_TEXT_LEFT
-                        );
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        foreach (LowBlueLightPlusModes md : low_blue_light_plus_modes) {
-                            Nk_symbol_type symbol = md.mode
-                                == low_blue_light_plus_val ? Nk_symbol_type
-                                    .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
-                                        .NK_SYMBOL_CIRCLE_OUTLINE;
-                            if (nuklear::nk_button_symbol_label(
-                                ctx,
-                                symbol,
-                                md.name,
-                                (uint)Nk_text_alignment.NK_TEXT_LEFT
-                            )) {
-                                if (md.mode != low_blue_light_plus_val) {
-                                    low_blue_light_plus_val = md.mode;
-                                    if (@ok(
-                                        bc.try_push(
-                                            {
-                                                .type = CommandType.SET_LOW_BLUE_LIGHT_PLUS,
-                                                .value = { .lblp_mode = low_blue_light_plus_val },
-                                            }
-                                        )
-                                    )) io::printn("sent");
-                                }
-                            }
+                        )) {
+                            active_tab = td.tab;
                         }
-
-                        nuklear::nk_group_end(ctx);
                     }
 
-                    nuklear::nk_layout_row_push(ctx, 0.42f);
+                    nuklear::nk_layout_row_dynamic(ctx, SPACER_XS, 1);
+                    nuklear::nk_spacing(ctx, 1);
+
+                    // Active tab content
+                    nuklear::nk_layout_row_dynamic(ctx, (float)h - 24 - TAB_HEIGHT - SPACER_XS, 1);
                     if (nuklear::nk_group_begin(
                         ctx,
-                        "Mode",
-                        (uint)Nk_panel_flags.NK_WINDOW_BORDER | (uint)Nk_panel_flags.NK_WINDOW_TITLE
+                        "TabContent",
+                        (uint)Nk_panel_flags.NK_WINDOW_BORDER
                     )) {
-                        // nuklear::nk_layout_row_dynamic(ctx, 10, 1);
-                        // nuklear::nk_spacing(ctx, 1);
+                        switch (active_tab) {
+                            case GuiTab.DISPLAY:
 
-                        // Display Mode
-                        nuklear::nk_layout_row_dynamic(ctx, 22, 1);
-                        nuklear::nk_label(
-                            ctx,
-                            "Display Mode",
-                            (uint)Nk_text_alignment.NK_TEXT_LEFT
-                        );
+                                {
+                                    // Brightness
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+                                       String b_val = string::format(
+                                        &libc,
+                                        "Brightness: %d",
+                                        (int)(brightness_slider_val * 100.0f)
+                                    );
 
-                        nuklear::nk_layout_row_dynamic(ctx, 26, 1);
-                        foreach (DisplayModes dm : display_modes) {
-                            Nk_symbol_type symbol = dm.mode
-                                == display_code ? Nk_symbol_type
-                                    .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
-                                        .NK_SYMBOL_CIRCLE_OUTLINE;
-
-                            if (nuklear::nk_button_symbol_label(
-                                ctx,
-                                symbol,
-                                dm.name,
-                                (uint)Nk_text_alignment.NK_TEXT_LEFT
-                            )) {
-                                if (dm.mode != display_code) {
-                                    display_code = dm.mode;
-                                    if (@ok(
-                                        bc.try_push(
-                                            {
-                                                .type = CommandType.SET_COLOR_MODE,
-                                                .value = { .mode = display_code },
-                                            }
-                                        )
-                                    )) io::printn("sent");
-                                }
-                            }
-                        }
-
-                        nuklear::nk_layout_row_dynamic(ctx, 14, 1);
-                        // nuklear::nk_spacing(ctx, 1);
-
-                        // Color Preset
-                        nuklear::nk_layout_row_dynamic(ctx, 22, 1);
-                        nuklear::nk_label(
-                            ctx,
-                            "Color Preset",
-                            (uint)Nk_text_alignment.NK_TEXT_LEFT
-                        );
-
-                        nuklear::nk_layout_row_dynamic(ctx, 26, 1);
-                        foreach (TemperatureModes tm : temp_modes) {
-                            Nk_symbol_type symbol = tm.mode
-                                == color_code ? Nk_symbol_type
-                                    .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
-                                        .NK_SYMBOL_CIRCLE_OUTLINE;
-
-                            if (nuklear::nk_button_symbol_label(
-                                ctx,
-                                symbol,
-                                tm.name,
-                                (uint)Nk_text_alignment.NK_TEXT_LEFT
-                            )) {
-                                if (tm.mode != color_code) {
-                                    color_code = tm.mode;
-                                    if (color_code != ColorTemperature.USER_DEFINE) {
+                                    nuklear::nk_label(
+                                        ctx,
+                                        (CChar*)b_val,
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+                                    if (nuklear::nk_slider_float(
+                                        ctx,
+                                        0.0f,
+                                        &&brightness_slider_val,
+                                        brightness_max_value,
+                                        0.01f
+                                    )) {
                                         if (@ok(
                                             bc.try_push(
                                                 {
-                                                    .type = CommandType.SET_COLOR_PRESET,
-                                                    .value = { .color_temp = color_code },
+                                                    .type = CommandType.SET_BRIGHTNESS,
+                                                    .value = {
+                                                        .brightness = (uint)(brightness_slider_val
+                                                            * 100.f)
+                                                    },
                                                 }
                                             )
                                         )) io::printn("sent");
                                     }
+
+                                    nuklear::nk_layout_row_dynamic(ctx, SPACER_MD, 1);
+                                    nuklear::nk_spacing(ctx, 1);
+
+                                    // Contrast
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+                                       String c_val = string::format(
+                                        &libc,
+                                        "Contrast: %d",
+                                        (int)(constrast_slider_val * 100.0f)
+                                    );
+
+                                    nuklear::nk_label(
+                                        ctx,
+                                        (CChar*)c_val,
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+                                    if (nuklear::nk_slider_float(
+                                        ctx,
+                                        0.0f,
+                                        &&constrast_slider_val,
+                                        constrast_max_value,
+                                        0.01f
+                                    )) {
+                                        if (@ok(
+                                            bc.try_push(
+                                                {
+                                                    .type = CommandType.SET_CONTRAST,
+                                                    .value = {
+                                                        .contrast = (uint)(constrast_slider_val
+                                                            * 100.f)
+                                                    },
+                                                }
+                                            )
+                                        )) io::printn("sent");
+                                    }
+
+                                    nuklear::nk_layout_row_dynamic(ctx, SPACER_SM, 1);
+                                    nuklear::nk_spacing(ctx, 1);
+
+                                    // Sharpness
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+                                    String s_val = string::format(
+                                        &libc,
+                                        "Sharpness: %d",
+                                        (int)(sharpness_slider_val * 100.0f + 0.5f)
+                                    );
+
+                                    nuklear::nk_label(
+                                        ctx,
+                                        (CChar*)s_val,
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+                                    if (nuklear::nk_slider_float(
+                                        ctx,
+                                        0.0f,
+                                        &&sharpness_slider_val,
+                                        sharpness_max_val,
+                                        0.01f
+                                    )) {
+                                        if (@ok(
+                                            bc.try_push(
+                                                {
+                                                    .type = CommandType.SET_SHARPNESS,
+                                                    .value = {
+                                                        .sharpness = (uint)(sharpness_slider_val
+                                                            * 100.f
+                                                            + 0.5f)
+                                                    },
+                                                }
+                                            )
+                                        )) io::printn("sent");
+                                    }
+
+                                    nuklear::nk_layout_row_dynamic(ctx, SPACER_MD, 1);
+                                    nuklear::nk_spacing(ctx, 1);
+
+                                    // Low Blue Light Plus
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+                                    nuklear::nk_label(
+                                        ctx,
+                                        "Low Blue Light Plus",
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+
+                                    foreach (LowBlueLightPlusModes md : low_blue_light_plus_modes) {
+                                        Nk_symbol_type symbol = md.mode
+                                            == low_blue_light_plus_val ? Nk_symbol_type
+                                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
+                                                    .NK_SYMBOL_CIRCLE_OUTLINE;
+
+                                        if (nuklear::nk_button_symbol_label(
+                                            ctx,
+                                            symbol,
+                                            (CChar*)md.name,
+                                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                        )) {
+                                            if (md.mode != low_blue_light_plus_val) {
+                                                low_blue_light_plus_val = md.mode;
+                                                if (@ok(
+                                                    bc.try_push(
+                                                        {
+                                                            .type = CommandType
+                                                                .SET_LOW_BLUE_LIGHT_PLUS,
+                                                            .value = {
+                                                                .lblp_mode = low_blue_light_plus_val
+                                                            },
+                                                        }
+                                                    )
+                                                )) io::printn("sent");
+                                            }
+                                        }
+                                    }
+
+                                    nuklear::nk_layout_row_dynamic(ctx, SPACER_MD, 1);
+                                    nuklear::nk_spacing(ctx, 1);
+
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_BUTTON, 1);
+                                    nuklear::nk_label(
+                                        ctx,
+                                        "B.I Gen 2",
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_BUTTON, 1);
+
+
+                                    foreach (GenericOne dm : bi_gen_modes) {
+                                        Nk_symbol_type symbol = dm.val
+                                            == bi_gen2 ? Nk_symbol_type
+                                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
+                                                    .NK_SYMBOL_CIRCLE_OUTLINE;
+
+                                        nuklear::Nk_bool selected = 0;
+                                        if (dm.val == bi_gen2) selected = 1;
+
+                                        if (nuklear::nk_selectable_label(
+                                            ctx,
+                                            (CChar*)dm.name,
+                                            (uint)Nk_text_alignment.NK_TEXT_LEFT,
+                                            &selected
+                                        )) {
+                                            if (selected) {
+                                                bi_gen2 = dm.val;
+                                                if (@ok(
+                                                    bc.try_push(
+                                                        {
+                                                            .type = CommandType.SET_BI_GEN2,
+                                                            .value = { .bi_gen2 = bi_gen2 },
+                                                        }
+                                                    )
+                                                )) io::printn("sent");
+                                            }
+                                        }
+                                    }
+                                    break;
                                 }
-                            }
+
+                            case GuiTab.MODE:
+
+                                {
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_LABEL, 1);
+
+                                    // Display Mode
+                                    nuklear::nk_label(
+                                        ctx,
+                                        "Display Mode",
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_BUTTON, 1);
+                                    foreach (DisplayModes dm : display_modes) {
+                                        Nk_symbol_type symbol = dm.mode
+                                            == display_code ? Nk_symbol_type
+                                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
+                                                    .NK_SYMBOL_CIRCLE_OUTLINE;
+
+                                        if (nuklear::nk_button_symbol_label(
+                                            ctx,
+                                            symbol,
+                                            (CChar*)dm.name,
+                                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                        )) {
+                                            if (dm.mode != display_code) {
+                                                display_code = dm.mode;
+                                                if (@ok(
+                                                    bc.try_push(
+                                                        {
+                                                            .type = CommandType.SET_COLOR_MODE,
+                                                            .value = { .mode = display_code },
+                                                        }
+                                                    )
+                                                )) io::printn("sent");
+                                            }
+                                        }
+                                    }
+
+                                    // Color Preset
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_LABEL, 1);
+                                    nuklear::nk_label(
+                                        ctx,
+                                        "Color Preset",
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_BUTTON, 1);
+                                    foreach (TemperatureModes tm : temp_modes) {
+                                        Nk_symbol_type symbol = tm.mode
+                                            == color_code ? Nk_symbol_type
+                                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
+                                                    .NK_SYMBOL_CIRCLE_OUTLINE;
+
+                                        if (nuklear::nk_button_symbol_label(
+                                            ctx,
+                                            symbol,
+                                            (CChar*)tm.name,
+                                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                        )) {
+                                            if (tm.mode != color_code) {
+                                                color_code = tm.mode;
+                                                if (color_code != ColorTemperature.USER_DEFINE) {
+                                                    if (@ok(
+                                                        bc.try_push(
+                                                            {
+                                                                .type = CommandType
+                                                                    .SET_COLOR_PRESET,
+                                                                .value = {
+                                                                    .color_temp = color_code
+                                                                },
+                                                            }
+                                                        )
+                                                    )) io::printn("sent");
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_LABEL, 1);
+                                    nuklear::nk_label(
+                                        ctx,
+                                        "AMA",
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_BUTTON, 1);
+
+                                    foreach (AmaModes tm : ama_modes) {
+                                        Nk_symbol_type symbol = tm.mode
+                                            == ama_mode ? Nk_symbol_type
+                                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
+                                                    .NK_SYMBOL_CIRCLE_OUTLINE;
+
+                                        if (nuklear::nk_button_symbol_label(
+                                            ctx,
+                                            symbol,
+                                            (CChar*)tm.name,
+                                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                        )) {
+                                            if (tm.mode != ama_mode) {
+                                                ama_mode = tm.mode;
+                                                if (@ok(
+                                                    bc.try_push(
+                                                        {
+                                                            .type = CommandType.SET_AMA,
+                                                            .value = { .ama = (uint)ama_mode },
+                                                        }
+                                                    )
+                                                )) io::printn("sent");
+                                            }
+                                        }
+                                    }
+
+                                    // User-defined RGB
+                                    // if (color_code == ColorTemperature.USER_DEFINE) {
+                                    //     nuklear::nk_layout_row_dynamic(ctx, SPACER_MD, 1);
+                                    // 
+                                    //     nuklear::nk_layout_row_dynamic(ctx, 200.0f, 1);
+                                    //     if (nuklear::nk_group_begin(
+                                    //         ctx,
+                                    //         "rgb_group",
+                                    //         (uint)Nk_panel_flags.NK_WINDOW_BORDER
+                                    //             | (uint)Nk_panel_flags.NK_WINDOW_TITLE
+                                    //     )) {
+                                    //         nuklear::nk_layout_row_dynamic(ctx, SPACER_XS, 1);
+                                    //         nuklear::nk_spacing(ctx, 1);
+                                    // 
+                                    //         nuklear::nk_layout_row_dynamic(ctx, SPACER_LOAD, 1);
+                                    //         if (nuklear::nk_slider_float(
+                                    //             ctx,
+                                    //             0.0f,
+                                    //             &red,
+                                    //             RGB_SLIDER_MAX,
+                                    //             RGB_SLIDER_STEP
+                                    //         )) {
+                                    //             if (@ok(
+                                    //                 bc.try_push(
+                                    //                     {
+                                    //                         .type = CommandType.SET_RED_GAIN,
+                                    //                         .value = {
+                                    //                             .val = (uint)(red * 100.0f)
+                                    //                         },
+                                    //                     }
+                                    //                 )
+                                    //             ));}
+                                    // 
+                                    //         nuklear::nk_layout_row_dynamic(ctx, SPACER_LOAD, 1);
+                                    //         if (nuklear::nk_slider_float(
+                                    //             ctx,
+                                    //             0.0f,
+                                    //             &green,
+                                    //             RGB_SLIDER_MAX,
+                                    //             RGB_SLIDER_STEP
+                                    //         )) {
+                                    //             if (@ok(
+                                    //                 bc.try_push(
+                                    //                     {
+                                    //                         .type = CommandType.SET_GREEN_GAIN,
+                                    //                         .value = {
+                                    //                             .val = (uint)(green * 100.0f)
+                                    //                         },
+                                    //                     }
+                                    //                 )
+                                    //             ));}
+                                    // 
+                                    //         nuklear::nk_layout_row_dynamic(ctx, SPACER_LOAD, 1);
+                                    //         if (nuklear::nk_slider_float(
+                                    //             ctx,
+                                    //             0.0f,
+                                    //             &blue,
+                                    //             RGB_SLIDER_MAX,
+                                    //             RGB_SLIDER_STEP
+                                    //         )) {
+                                    //             if (@ok(
+                                    //                 bc.try_push(
+                                    //                     {
+                                    //                         .type = CommandType.SET_BLUE_GAIN,
+                                    //                         .value = {
+                                    //                             .val = (uint)(blue * 100.0f)
+                                    //                         },
+                                    //                     }
+                                    //                 )
+                                    //             ));}
+                                    // 
+                                    //         nuklear::nk_group_end(ctx);
+                                    //     }
+                                    // }
+
+                                    break;
+                                }
+
+                            case GuiTab.AUDIO:
+
+                                {
+                                    nuklear::nk_layout_row_dynamic(ctx, SPACER_SM, 1);
+                                    nuklear::nk_spacing(ctx, 1);
+
+                                    // Audio Mute
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_BUTTON, 1);
+                                    nuklear::nk_label(
+                                        ctx,
+                                        "Audio Mute",
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+
+                                    foreach (GenericOne dm : audio_mute_modes) {
+                                        Nk_symbol_type symbol = dm.val
+                                            == audio_mute ? Nk_symbol_type
+                                                .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
+                                                    .NK_SYMBOL_CIRCLE_OUTLINE;
+
+                                        if (nuklear::nk_button_symbol_label(
+                                            ctx,
+                                            symbol,
+                                            (CChar*)dm.name,
+                                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                        )) {
+                                            if (dm.val != audio_mute) {
+                                                audio_mute = dm.val;
+                                                if (@ok(
+                                                    bc.try_push(
+                                                        {
+                                                            .type = CommandType.SET_AUDIO_MUTE,
+                                                            .value = { .audio_mute = audio_mute },
+                                                        }
+                                                    )
+                                                )) io::printn("sent");
+                                            }
+                                        }
+                                    }
+
+                                    nuklear::nk_layout_row_dynamic(ctx, SPACER_MD, 1);
+                                    nuklear::nk_spacing(ctx, 1);
+
+                                    // Volume
+                                    bool audio_is_muted = audio_mute == AUDIO_MUTE_VALUE;
+
+                                     String a_val = string::format(
+                                        &libc,
+                                        "Volume: %d",
+                                        (int)(volume_slider_val * 100.0f)
+                                    );
+
+
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+                                    nuklear::nk_label(
+                                        ctx,
+                                        (CChar*)a_val,
+                                        (uint)Nk_text_alignment.NK_TEXT_LEFT
+                                    );
+                                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
+
+                                    if (audio_is_muted) nuklear::nk_widget_disable_begin(ctx);
+
+                                    if (nuklear::nk_slider_float(
+                                        ctx,
+                                        0.0f,
+                                        &&volume_slider_val,
+                                        1.0f,
+                                        0.01f
+                                    )) {
+                                        if (@ok(
+                                            bc.try_push(
+                                                {
+                                                    .type = CommandType.SET_VOLUME,
+                                                    .value = {
+                                                        .volume = (uint)(volume_slider_val * 100.f)
+                                                    },
+                                                }
+                                            )
+                                        )) io::printn("sent");
+                                    }
+
+                                    if (audio_is_muted) nuklear::nk_widget_disable_end(ctx);
+                                    break;
+                                }
                         }
-
-                        if (color_code == ColorTemperature.USER_DEFINE) {
-                            nuklear::nk_layout_row_dynamic(ctx, 12, 1);
-                            nuklear::nk_spacing(ctx, 1);
-
-                            if (nuklear::nk_group_begin(
-                                ctx,
-                                "rgb_group",
-                                (uint)Nk_panel_flags.NK_WINDOW_BORDER
-                                    | (uint)Nk_panel_flags.NK_WINDOW_TITLE
-                            )) {
-                                nuklear::nk_layout_row_dynamic(ctx, 8, 1);
-                                nuklear::nk_spacing(ctx, 1);
-
-                                nuklear::nk_layout_row_dynamic(ctx, 20, 1);
-                                if (nuklear::nk_slider_float(ctx, 0.0f, &red, 100, 0.01f)) {
-                                    if (@ok(
-                                        bc.try_push(
-                                            {
-                                                .type = CommandType.SET_RED_GAIN,
-                                                .value = { .val = (uint)(red * 100.0f) }
-                                            }
-                                        )
-                                    ));}
-
-                                nuklear::nk_layout_row_dynamic(ctx, 20, 1);
-                                if (nuklear::nk_slider_float(ctx, 0.0f, &green, 100, 0.01f)) {
-                                    if (@ok(
-                                        bc.try_push(
-                                            {
-                                                .type = CommandType.SET_GREEN_GAIN,
-                                                .value = { .val = (uint)(green * 100.0f), }
-                                            }
-                                        )
-                                    ));}
-
-                                nuklear::nk_layout_row_dynamic(ctx, 20, 1);
-                                if (nuklear::nk_slider_float(ctx, 0.0f, &blue, 100, 0.01f)) {
-                                    if (@ok(
-                                        bc.try_push(
-                                            {
-                                                .type = CommandType.SET_BLUE_GAIN,
-                                                .value = { .val = (uint)(blue * 100.0f) }
-                                            }
-                                        )
-                                    ));}
-
-                                nuklear::nk_group_end(ctx);
-                            }
-                        }
-
                         nuklear::nk_group_end(ctx);
                     }
-
-                    nuklear::nk_layout_row_end(ctx);
                 }
 
                 nuklear::nk_end(ctx);
@@ -942,26 +1270,28 @@ fn void gui_thing(GuiArgs* args) {
                 Nk_rect bounds = nuklear::nk_rect(0, 0, 300, 100);
                 bounds.x = (w - bounds.w) / 2.0f;
                 bounds.y = (h - bounds.h) / 2.0f;
+
                 if (nuklear::nk_begin(
                     ctx,
                     "Loading",
                     bounds,
                     (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
                 )) {
-                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                    nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
                     nuklear::nk_label(
                         ctx,
                         "Getting monitor information...",
                         (uint)Nk_text_alignment.NK_TEXT_CENTERED
                     );
 
-                    nuklear::nk_layout_row_dynamic(ctx, 20, 1);
+                    nuklear::nk_layout_row_dynamic(ctx, SPACER_LOAD, 1);
                     nuklear::nk_label(
                         ctx,
                         "Please wait...",
                         (uint)Nk_text_alignment.NK_TEXT_CENTERED
                     );
                     nuklear::nk_end(ctx);
+
                     nuklear::glViewport(0, 0, w, h);
                     nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
                     nuklear::glClear(GL_COLOR_BUFFER_BIT);
@@ -985,12 +1315,13 @@ fn void change_stuff(BufferedChannel{MonitorCommand}* bc) {
             MonitorCommand? cmd = bc.pop();
             if (catch cmd) return;
 
-            uint br_value    = cmd.value.brightness;
-            uint ct_value    = cmd.value.contrast;
-            uint red_value   = cmd.value.val;
-            uint green_value = cmd.value.val;
-            uint blue_value  = cmd.value.val;
-            uint volume      = cmd.value.volume;
+            uint br_value      = cmd.value.brightness;
+            uint ct_value      = cmd.value.contrast;
+            uint sharpness_val = cmd.value.sharpness;
+            uint red_value     = cmd.value.val;
+            uint green_value   = cmd.value.val;
+            uint blue_value    = cmd.value.val;
+            uint volume        = cmd.value.volume;
 
             thread::sleep_ms(80);
 
@@ -1012,35 +1343,44 @@ fn void change_stuff(BufferedChannel{MonitorCommand}* bc) {
                     }
                     set_vcp("2", ct_value, CONTRAST);
 
+                case CommandType.SET_SHARPNESS:
+                    for (;;) {
+                        MonitorCommand? next = bc.try_pop();
+                        if (catch next) break;
+                        if (next.type
+                            == CommandType.SET_SHARPNESS) sharpness_val = next.value.sharpness;
+                    }
+                    set_vcp("2", sharpness_val, SHARPNESS);
+
                 case CommandType.SET_COLOR_MODE:
                     set_vcp("2", (uint)cmd.value.mode, DISPLAY_MODE);
 
                 case CommandType.SET_COLOR_PRESET:
                     set_vcp("2", (uint)cmd.value.color_temp, COLOR_TEMPERATURE_REQUEST);
 
-                case CommandType.SET_RED_GAIN:
-                    for (;;) {
-                        MonitorCommand? next = bc.try_pop();
-                        if (catch next) break;
-                        if (next.type == CommandType.SET_RED_GAIN) red_value = next.value.val;
-                    }
-                    set_vcp("2", red_value, VIDEO_GAIN_RED);
+                // case CommandType.SET_RED_GAIN:
+                //     for (;;) {
+                //         MonitorCommand? next = bc.try_pop();
+                //         if (catch next) break;
+                //         if (next.type == CommandType.SET_RED_GAIN) red_value = next.value.val;
+                //     }
+                //     set_vcp("2", red_value, VIDEO_GAIN_RED);
 
-                case CommandType.SET_GREEN_GAIN:
-                    for (;;) {
-                        MonitorCommand? next = bc.try_pop();
-                        if (catch next) break;
-                        if (next.type == CommandType.SET_GREEN_GAIN) green_value = next.value.val;
-                    }
-                    set_vcp("2", green_value, VIDEO_GAIN_GREEN);
-
-                case CommandType.SET_BLUE_GAIN:
-                    for (;;) {
-                        MonitorCommand? next = bc.try_pop();
-                        if (catch next) break;
-                        if (next.type == CommandType.SET_BLUE_GAIN) blue_value = next.value.val;
-                    }
-                    set_vcp("2", blue_value, VIDEO_GAIN_BLUE);
+                // case CommandType.SET_GREEN_GAIN:
+                //     for (;;) {
+                //         MonitorCommand? next = bc.try_pop();
+                //         if (catch next) break;
+                //         if (next.type == CommandType.SET_GREEN_GAIN) green_value = next.value.val;
+                //     }
+                //     set_vcp("2", green_value, VIDEO_GAIN_GREEN);
+                // 
+                // case CommandType.SET_BLUE_GAIN:
+                //     for (;;) {
+                //         MonitorCommand? next = bc.try_pop();
+                //         if (catch next) break;
+                //         if (next.type == CommandType.SET_BLUE_GAIN) blue_value = next.value.val;
+                //     }
+                //     set_vcp("2", blue_value, VIDEO_GAIN_BLUE);
 
                 case CommandType.SET_VOLUME:
                     for (;;) {
@@ -1052,6 +1392,11 @@ fn void change_stuff(BufferedChannel{MonitorCommand}* bc) {
 
                 case CommandType.SET_LOW_BLUE_LIGHT_PLUS:
                     set_vcp("2", (uint)cmd.value.lblp_mode, LOWBLUELIGHTPLUS);
+
+                case CommandType.SET_AUDIO_MUTE:
+                    set_vcp("2", (uint)cmd.value.audio_mute, AUDIO_MUTE);
+                case CommandType.SET_BI_GEN2:
+                    set_vcp("2", (uint)cmd.value.bi_gen2, BIGEN2);
 
                 default:
             }
@@ -1065,9 +1410,9 @@ struct GuiArgs {
 }
 
 fn int main(String[] args) {
-    VcpInfo s = get_vcp(AUDIO_MUTE, "2")!!;
-
-    // io::printn(color_preset);
+    // VcpInfo s = get_vcp(AMA, "2")!!;
+    // 
+    // io::printn(s.value);
 
     // UserDefine ud = get_user_define_vals();
 
@@ -1078,25 +1423,25 @@ fn int main(String[] args) {
     // io::printn(Nk_style_button::size);
     // io::printn(Nk_style::size);
     // io::printn(Nk_context::size);
+    // 
+    Thread tg, tb, ts;
+    GuiArgs ga = { };
+    ga.channel = channel::create_buffered(mem, 1024 * 1024)!!;
+    ga.monitor_state_channel = channel::create_buffered(mem, 1024 * 1024)!!;
+    defer ga.monitor_state_channel.destroy();
+    defer ga.channel.destroy();
 
-    // Thread tg, tb, ts;
-    // GuiArgs ga = { };
-    // ga.channel = channel::create_buffered(mem, 1024 * 1024)!!;
-    // ga.monitor_state_channel = channel::create_buffered(mem, 1024 * 1024)!!;
-    // defer ga.monitor_state_channel.destroy();
-    // defer ga.channel.destroy();
-    //
-    //
-    // tg.create((ThreadFn)&gui_thing, &ga)!!;
-    // tb.create((ThreadFn)&change_stuff, ga.channel)!!;
-    // ts.create((ThreadFn)&load_monitor_state, ga.monitor_state_channel)!!;
-    // tg.join()!!;
-    // ga.channel.close();
-    //
-    // tb.join()!!;
-    // ts.join()!!;
-    //
-    // ga.monitor_state_channel.close();
-    //
+
+    tg.create((ThreadFn)&gui_thing, &ga)!!;
+    tb.create((ThreadFn)&change_stuff, ga.channel)!!;
+    ts.create((ThreadFn)&load_monitor_state, ga.monitor_state_channel)!!;
+    tg.join()!!;
+    ga.channel.close();
+
+    tb.join()!!;
+    ts.join()!!;
+
+    ga.monitor_state_channel.close();
+
     return 0;
 }
