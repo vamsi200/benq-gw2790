@@ -143,6 +143,16 @@ struct Nk_style {
   Nk_style_window window;     // 856 bytes
 }
 
+extern fn Nk_bool nk_group_begin(
+  Nk_context* ctx,
+  CChar* title,
+  Nk_flags flags)
+@cname("nk_group_begin");
+
+extern fn void nk_group_end(
+  Nk_context* ctx)
+@cname("nk_group_end");
+
 // struct Nk_style {
 //   char[1664] pad;
 //   // Nk_user_font* font;

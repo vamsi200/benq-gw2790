@@ -5,6 +5,7 @@ import std::collections::list;
 import nuklear;
 import nuklear_sdl_gl3;
 import std::thread::channel;
+import libc;
 
 struct Monitor {
     String model;
@@ -36,6 +37,17 @@ constdef DisplayMode : uint {
     CARE_MODE = 0x27
 }
 
+// 0x19 - low blue light plus:
+// 0x01 - 0 upto 6 (aka 0x05)
+
+constdef LowBlueLightPlus : uint {
+    VAL1 = 0x00,
+    VAL2 = 0x01,
+    VAL3 = 0x02,
+    VAL4 = 0x03,
+    VAL5 = 0x04,
+}
+
 struct MonitorState {
     uint brightness;
     uint max_brightness;
@@ -45,6 +57,8 @@ struct MonitorState {
     ColorTemperature color_temperature;
     UserDefine user_define_color;
     uint volume;
+    LowBlueLightPlus low_blue_light_plus;
+    uint audio_mute;
     // 
     // bool muted;
     // 
@@ -71,6 +85,7 @@ const COLOR_TEMPERATURE_REQUEST = "0x0c";
 // 63 - 9300K - Bluish - 0x08
 
 // 35 * (r,g,b) - UserDefine - 0x0b
+
 
 constdef ColorTemperature : uint {
     NORMAL      = 35,
@@ -176,8 +191,8 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
         vcp_info.code = code;
 
         String[] parts = line.split(tmem, ",");
-        vcp_val.data.range_val[0] = (uint)parts[0].split(tmem, "=")[1].trim().to_int()!;
-        vcp_val.data.range_val[1] = (uint)parts[1].split(tmem, "=")[1].trim().to_int()!;
+        vcp_val.data.range_val[0] = parts[0].split(tmem, "=")[1].trim().to_uint()!;
+        vcp_val.data.range_val[1] = parts[1].split(tmem, "=")[1].trim().to_uint()!;
         vcp_info.value = vcp_val;
     }
 
@@ -229,6 +244,25 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
         vcp_info.value = vcp_val;
     }
 
+    if (line.contains("0x19")) {
+        vcp_val.kind = VcpKind.ENUM_VAL;
+        vcp_info.code = code;
+        long? idx = line.rindex_of("=");
+        if (catch idx) vcp_val.data.enum_val = "0";
+        vcp_val.data.enum_val = line[idx + 1..]!.trim();
+        vcp_info.name = "Low Blue Light Plus";
+        vcp_info.value = vcp_val;
+    }
+
+    if (line.contains("0x8d")) {
+          vcp_val.kind = VcpKind.RAW;
+          vcp_info.code = code;
+          String[] parts = line.tsplit(",");
+          vcp_val.data.raw_val = parts[0].tsplit("=")[1].strip_suffix(")").trim().to_uint()!;
+          vcp_info.name = "Audio Mute";
+          vcp_info.value = vcp_val;
+    }
+
     return vcp_info;
 }
 
@@ -245,13 +279,17 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
     LibcAllocator libc;
 
     @pool_init(&libc, 1024) {
-        MonitorState ms      = { };
-        VcpInfo brightness   = get_vcp(BRIGHTNESS, "2")!!;
-        VcpInfo contrast     = get_vcp(CONTRAST, "2")!!;
-        VcpInfo display_mode = get_vcp(DISPLAY_MODE, "2")!!;
-        VcpInfo color_preset = get_vcp(SELECT_COLOR_PRESET, "2")!!;
-        VcpInfo volume       = get_vcp(AUDIO_SPEAKER_VOLUME, "2")!!;
+        MonitorState ms             = { };
+        VcpInfo brightness          = get_vcp(BRIGHTNESS, "2")!!;
+        VcpInfo contrast            = get_vcp(CONTRAST, "2")!!;
+        VcpInfo display_mode        = get_vcp(DISPLAY_MODE, "2")!!;
+        VcpInfo color_preset        = get_vcp(SELECT_COLOR_PRESET, "2")!!;
+        VcpInfo volume              = get_vcp(AUDIO_SPEAKER_VOLUME, "2")!!;
+        VcpInfo low_blue_light_plus = get_vcp(LOWBLUELIGHTPLUS, "2")!!;
+        VcpInfo audio_mute = get_vcp(AUDIO_MUTE, "2")!!;
 
+        ms.audio_mute = audio_mute.value.data.raw_val;
+        ms.low_blue_light_plus = convert_lbl(low_blue_light_plus.value.data.enum_val);
         ms.color_temperature = color_preset.value.data.color_val.preset;
         ms.brightness = brightness.value.data.range_val[0];
         ms.max_brightness = brightness.value.data.range_val[1];
@@ -267,6 +305,20 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
         if (@ok(monitor_state_channel.push(ms))) return true;
         return false;
     };
+}
+
+fn LowBlueLightPlus convert_lbl(String lbl) {
+    LowBlueLightPlus llp;
+    switch (lbl) {
+        case "0x00": llp = LowBlueLightPlus.VAL1;
+        case "0x01": llp = LowBlueLightPlus.VAL2;
+        case "0x02": llp = LowBlueLightPlus.VAL3;
+        case "0x03": llp = LowBlueLightPlus.VAL4;
+        case "0x04": llp = LowBlueLightPlus.VAL5;
+        default: llp = LowBlueLightPlus.VAL1;
+    }
+
+    return llp;
 }
 
 fn String color_mode_to_string(DisplayMode cm) {
@@ -298,13 +350,18 @@ fn DisplayMode convert_da_thing(String color_code) {
 
 fn bool set_vcp(String bus, uint val, String code) => @pool() {
     String v = string::tformat("%s", val);
-    char[1024] buf;
+    char[512] buf;
+    String[] cmd;
 
-    String? output = process::run_capture_stdout(
-        &buf,
-        { "ddcutil", "setvcp", code, v, "--bus", bus }
-    )!!;
+    if (code == LOWBLUELIGHTPLUS) {
+        cmd = { "ddcutil", "setvcp", code, v, "--bus", bus, "--permit-unknown-feature", };
+    } else {
+        cmd = { "ddcutil", "setvcp", code, v, "--bus", bus, };
+    }
+
+    String? output = process::run_capture_stdout(&buf, cmd)!!;
     if (catch output) return false;
+
     return true;
 }
 
@@ -336,6 +393,9 @@ const SATURATION_CYAN    = "0x5C";
 const SATURATION_BLUE    = "0x5D";
 const SATURATION_MAGENTA = "0x5E";
 
+// off - 0x00, on - 0xff
+const BIGEN2 = "0xe2";
+
 const String[*] SATURATION_RYGCBM = {
     SATURATION_RED,
     SATURATION_YELLOW,
@@ -346,10 +406,17 @@ const String[*] SATURATION_RYGCBM = {
 };
 
 
+const LOWBLUELIGHTPLUS = "0x19";
+
 // Input / Audio
 const INPUT_SOURCE         = "0x60";
 const AUDIO_SPEAKER_VOLUME = "0x62";
+// Mute - sl=0x01, UnMute - sl=0x02
 const AUDIO_MUTE           = "0x8D";
+
+// Doesn't work :/
+// // 0x1c - Dialogue, 0x00 - Music, 0x21 - Standard
+// const AUDIO_MODE = "0xe1";
 
 // Video Black Level
 const VIDEO_BLACK_LEVEL_RED   = "0x6C";
@@ -466,6 +533,11 @@ struct TemperatureModes {
     ColorTemperature mode;
 }
 
+struct LowBlueLightPlusModes {
+    String name;
+    LowBlueLightPlus mode;
+}
+
 constdef CommandType : uint {
     SET_BRIGHTNESS,
     SET_COLOR_MODE,
@@ -475,11 +547,13 @@ constdef CommandType : uint {
     SET_RED_GAIN,
     SET_GREEN_GAIN,
     SET_BLUE_GAIN,
+    SET_LOW_BLUE_LIGHT_PLUS
 }
 
 union CommandValue {
     uint brightness;
     DisplayMode mode;
+    LowBlueLightPlus lblp_mode;
     uint contrast;
     uint val;
     uint volume;
@@ -532,6 +606,7 @@ fn void gui_thing(GuiArgs* args) {
         float brightness_slider_val, brightness_max_value, constrast_slider_val, constrast_max_value, volume_slider_val;
         int running = 1;
         ColorTemperature color_code;
+        LowBlueLightPlus low_blue_light_plus_val;
         float red, green, blue;
 
         bool state_received = false;
@@ -551,153 +626,70 @@ fn void gui_thing(GuiArgs* args) {
             { "User Define", ColorTemperature.USER_DEFINE }
         };
 
+        LowBlueLightPlusModes[] low_blue_light_plus_modes = {
+            { "1", LowBlueLightPlus.VAL1 },
+            { "2", LowBlueLightPlus.VAL2 },
+            { "3", LowBlueLightPlus.VAL3 },
+            { "4", LowBlueLightPlus.VAL4 },
+            { "5", LowBlueLightPlus.VAL5 }
+        };
+
         while (running) {
-
-            {
-                if (!state_received) {
-                    MonitorState? ms = args.monitor_state_channel.try_pop();
-                    if (@ok(ms)) {
-                        brightness_slider_val = (float)(ms.brightness)!! / 100;
-                        brightness_max_value = (float)(ms.max_brightness)!! / 100;
-                        constrast_slider_val = (float)(ms.contrast)!! / 100;
-                        constrast_max_value = (float)(ms.max_contrast)!! / 100;
-                        color_code = ms.color_temperature!!;
-                        display_code = ms.display_mode!!;
-                        red = (float)(ms.user_define_color.r)!! / 100;
-                        green = (float)(ms.user_define_color.g)!! / 100;
-                        blue = (float)(ms.user_define_color.b)!! / 100;
-                        volume_slider_val = (float)(ms.volume)!! / 100;
-                        state_received = true;
-                    }
+            if (!state_received) {
+                MonitorState? ms = args.monitor_state_channel.try_pop();
+                if (@ok(ms)) {
+                    brightness_slider_val = (float)(ms.brightness)!! / 100;
+                    brightness_max_value = (float)(ms.max_brightness)!! / 100;
+                    constrast_slider_val = (float)(ms.contrast)!! / 100;
+                    constrast_max_value = (float)(ms.max_contrast)!! / 100;
+                    color_code = ms.color_temperature!!;
+                    display_code = ms.display_mode!!;
+                    red = (float)(ms.user_define_color.r)!! / 100;
+                    green = (float)(ms.user_define_color.g)!! / 100;
+                    blue = (float)(ms.user_define_color.b)!! / 100;
+                    volume_slider_val = (float)(ms.volume)!! / 100;
+                    low_blue_light_plus_val = ms.low_blue_light_plus!!;
+                    state_received = true;
                 }
-                nuklear::SDL_Event evt;
-                nuklear::nk_input_begin(ctx);
-                while (nuklear::sdl_pollevent(&evt)) {
-                    if (evt.type == SDL_QUIT) running = 0;
-                    nuklear::nk_sdl_handle_event(&evt);
-                }
-                if (state_received) {
-                    nuklear::nk_input_end(ctx);
-                    int w, h;
-                    nuklear::sdl_getwindowsize(win, &w, &h);
+            }
+            nuklear::SDL_Event evt;
+            nuklear::nk_input_begin(ctx);
+            while (nuklear::sdl_pollevent(&evt)) {
+                if (evt.type == SDL_QUIT) running = 0;
+                nuklear::nk_sdl_handle_event(&evt);
+            }
 
-                    if (nuklear::nk_begin(
+            if (state_received) {
+                nuklear::nk_input_end(ctx);
+                int w, h;
+                nuklear::sdl_getwindowsize(win, &w, &h);
+
+                if (nuklear::nk_begin(
+                    ctx,
+                    "Main",
+                    nuklear::nk_rect(0, 0, w, h),
+                    (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
+                )) {
+                    nuklear::nk_layout_row_begin(
                         ctx,
-                        "Main",
-                        nuklear::nk_rect(0, 0, w, h),
-                        (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
+                        Nk_layout_format.NK_DYNAMIC,
+                        (float)h - 24,
+                        2
+                    );
+
+                    nuklear::nk_layout_row_push(ctx, 0.58f);
+                    if (nuklear::nk_group_begin(
+                        ctx,
+                        "Display",
+                        (uint)Nk_panel_flags.NK_WINDOW_BORDER | (uint)Nk_panel_flags.NK_WINDOW_TITLE
                     )) {
-                        // Sliders
+                        nuklear::nk_layout_row_dynamic(ctx, 10, 1);
+                        nuklear::nk_spacing(ctx, 1);
 
-                        // Gruvbox Theme
-
-                        // Window
-                        ctx.style.window.background = nuklear::nk_rgb(40, 40, 40); // bg0
-                        ctx.style.window.fixed_background = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(40, 40, 40)
-                        );
-                        ctx.style.window.border_color = nuklear::nk_rgb(60, 56, 54); // bg1
-                        ctx.style.window.popup_border_color = nuklear::nk_rgb(60, 56, 54);
-                        ctx.style.window.combo_border_color = nuklear::nk_rgb(60, 56, 54);
-                        ctx.style.window.contextual_border_color = nuklear::nk_rgb(60, 56, 54);
-                        ctx.style.window.menu_border_color = nuklear::nk_rgb(60, 56, 54);
-                        ctx.style.window.group_border_color = nuklear::nk_rgb(60, 56, 54);
-                        ctx.style.window.tooltip_border_color = nuklear::nk_rgb(60, 56, 54);
-                        ctx.style.window.border = 1;
-                        ctx.style.window.combo_border = 1;
-                        ctx.style.window.contextual_border = 1;
-                        ctx.style.window.menu_border = 1;
-                        ctx.style.window.group_border = 1;
-                        ctx.style.window.tooltip_border = 1;
-                        ctx.style.window.popup_border = 1;
-                        ctx.style.window.rounding = 2;
-                        ctx.style.window.padding = nuklear::nk_vec2(12, 12);
-                        ctx.style.window.spacing = nuklear::nk_vec2(6, 6);
-
-                        // Window header
-                        ctx.style.window.header.normal = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(50, 48, 47)
-                        ); // bg0_h
-                        ctx.style.window.header.hover = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(50, 48, 47)
-                        );
-                        ctx.style.window.header.active = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(50, 48, 47)
-                        );
-                        ctx.style.window.header.label_normal = nuklear::nk_rgb(
-                            235,
-                            219,
-                            178
-                        ); // fg1
-                        ctx.style.window.header.label_hover = nuklear::nk_rgb(
-                            250,
-                            189,
-                            47
-                        ); // yellow
-                        ctx.style.window.header.label_active = nuklear::nk_rgb(250, 189, 47);
-                        ctx.style.window.header.padding = nuklear::nk_vec2(4, 4);
-                        ctx.style.window.header.label_padding = nuklear::nk_vec2(4, 4);
-                        ctx.style.window.header.spacing = nuklear::nk_vec2(2, 2);
-
-                        // Buttons
-                        ctx.style.button.normal = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(60, 56, 54)
-                        ); // bg1
-                        ctx.style.button.hover = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(80, 73, 69)
-                        ); // bg2
-                        ctx.style.button.active = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(214, 93, 14)
-                        ); // orange
-                        ctx.style.button.border_color = nuklear::nk_rgb(40, 40, 40);
-                        ctx.style.button.text_background = nuklear::nk_rgb(60, 56, 54);
-                        ctx.style.button.text_normal = nuklear::nk_rgb(235, 219, 178); // fg1
-                        ctx.style.button.text_hover = nuklear::nk_rgb(250, 189, 47); // yellow
-                        ctx.style.button.text_active = nuklear::nk_rgb(
-                            29,
-                            32,
-                            33
-                        ); // bg0_h
-                        ctx.style.button.border = 1;
-                        ctx.style.button.rounding = 2;
-                        ctx.style.button.padding = nuklear::nk_vec2(6, 4);
-
-                        // Sliders
-                        ctx.style.slider.normal = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(50, 48, 47)
-                        );
-                        ctx.style.slider.hover = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(50, 48, 47)
-                        );
-                        ctx.style.slider.active = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(50, 48, 47)
-                        );
-                        ctx.style.slider.bar_normal = nuklear::nk_rgb(80, 73, 69);
-                        ctx.style.slider.bar_hover = nuklear::nk_rgb(80, 73, 69);
-                        ctx.style.slider.bar_active = nuklear::nk_rgb(80, 73, 69);
-                        ctx.style.slider.bar_filled = nuklear::nk_rgb(214, 93, 14); // orange fill
-                        ctx.style.slider.cursor_normal = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(250, 189, 47)
-                        ); // yellow knob
-                        ctx.style.slider.cursor_hover = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(254, 128, 25)
-                        );
-                        ctx.style.slider.cursor_active = nuklear::nk_style_item_color(
-                            nuklear::nk_rgb(250, 189, 47)
-                        );
-                        ctx.style.slider.border_color = nuklear::nk_rgb(40, 40, 40);
-                        ctx.style.slider.padding = nuklear::nk_vec2(0, 0);
-                        ctx.style.slider.border = 1;
-                        ctx.style.slider.rounding = 2;
-                        ctx.style.slider.bar_height = 5;
-
-
-                        nuklear::nk_layout_row_dynamic(ctx, 8, 1);
-
+                        // Brightness
                         nuklear::nk_layout_row_dynamic(ctx, 25, 1);
                         nuklear::nk_label(ctx, "Brightness", (uint)Nk_text_alignment.NK_TEXT_LEFT);
                         nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-
                         if (nuklear::nk_slider_float(
                             ctx,
                             0.0f,
@@ -717,9 +709,10 @@ fn void gui_thing(GuiArgs* args) {
                             )) io::printn("sent");
                         }
 
-                        nuklear::nk_layout_row_dynamic(ctx, 8, 1);
+                        nuklear::nk_layout_row_dynamic(ctx, 14, 1);
                         nuklear::nk_spacing(ctx, 1);
 
+                        // Contrast
                         nuklear::nk_layout_row_dynamic(ctx, 25, 1);
                         nuklear::nk_label(ctx, "Contrast", (uint)Nk_text_alignment.NK_TEXT_LEFT);
                         nuklear::nk_layout_row_dynamic(ctx, 25, 1);
@@ -742,9 +735,10 @@ fn void gui_thing(GuiArgs* args) {
                             )) io::printn("sent");
                         }
 
-                        nuklear::nk_layout_row_dynamic(ctx, 8, 1);
+                        nuklear::nk_layout_row_dynamic(ctx, 14, 1);
                         nuklear::nk_spacing(ctx, 1);
 
+                        // Volume
                         nuklear::nk_layout_row_dynamic(ctx, 25, 1);
                         nuklear::nk_label(ctx, "Volume", (uint)Nk_text_alignment.NK_TEXT_LEFT);
                         nuklear::nk_layout_row_dynamic(ctx, 25, 1);
@@ -759,19 +753,60 @@ fn void gui_thing(GuiArgs* args) {
                             )) io::printn("sent");
                         }
 
-                        nuklear::nk_layout_row_dynamic(ctx, 15, 1);
                         nuklear::nk_spacing(ctx, 1);
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        nuklear::nk_label(
+                            ctx,
+                            "Low Blue Light Plus",
+                            (uint)Nk_text_alignment.NK_TEXT_LEFT
+                        );
+                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        foreach (LowBlueLightPlusModes md : low_blue_light_plus_modes) {
+                            Nk_symbol_type symbol = md.mode
+                                == low_blue_light_plus_val ? Nk_symbol_type
+                                    .NK_SYMBOL_CIRCLE_SOLID : Nk_symbol_type
+                                        .NK_SYMBOL_CIRCLE_OUTLINE;
+                            if (nuklear::nk_button_symbol_label(
+                                ctx,
+                                symbol,
+                                md.name,
+                                (uint)Nk_text_alignment.NK_TEXT_LEFT
+                            )) {
+                                if (md.mode != low_blue_light_plus_val) {
+                                    low_blue_light_plus_val = md.mode;
+                                    if (@ok(
+                                        bc.try_push(
+                                            {
+                                                .type = CommandType.SET_LOW_BLUE_LIGHT_PLUS,
+                                                .value = { .lblp_mode = low_blue_light_plus_val },
+                                            }
+                                        )
+                                    )) io::printn("sent");
+                                }
+                            }
+                        }
+
+                        nuklear::nk_group_end(ctx);
+                    }
+
+                    nuklear::nk_layout_row_push(ctx, 0.42f);
+                    if (nuklear::nk_group_begin(
+                        ctx,
+                        "Mode",
+                        (uint)Nk_panel_flags.NK_WINDOW_BORDER | (uint)Nk_panel_flags.NK_WINDOW_TITLE
+                    )) {
+                        // nuklear::nk_layout_row_dynamic(ctx, 10, 1);
+                        // nuklear::nk_spacing(ctx, 1);
 
                         // Display Mode
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        nuklear::nk_layout_row_dynamic(ctx, 22, 1);
                         nuklear::nk_label(
                             ctx,
                             "Display Mode",
                             (uint)Nk_text_alignment.NK_TEXT_LEFT
                         );
 
-                        nuklear::nk_layout_row_dynamic(ctx, 28, 2);
-
+                        nuklear::nk_layout_row_dynamic(ctx, 26, 1);
                         foreach (DisplayModes dm : display_modes) {
                             Nk_symbol_type symbol = dm.mode
                                 == display_code ? Nk_symbol_type
@@ -798,18 +833,18 @@ fn void gui_thing(GuiArgs* args) {
                             }
                         }
 
-                        nuklear::nk_layout_row_dynamic(ctx, 15, 1);
-                        nuklear::nk_spacing(ctx, 1);
+                        nuklear::nk_layout_row_dynamic(ctx, 14, 1);
+                        // nuklear::nk_spacing(ctx, 1);
 
                         // Color Preset
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                        nuklear::nk_layout_row_dynamic(ctx, 22, 1);
                         nuklear::nk_label(
                             ctx,
                             "Color Preset",
                             (uint)Nk_text_alignment.NK_TEXT_LEFT
                         );
-                        nuklear::nk_layout_row_dynamic(ctx, 28, 2);
 
+                        nuklear::nk_layout_row_dynamic(ctx, 26, 1);
                         foreach (TemperatureModes tm : temp_modes) {
                             Nk_symbol_type symbol = tm.mode
                                 == color_code ? Nk_symbol_type
@@ -839,93 +874,99 @@ fn void gui_thing(GuiArgs* args) {
                         }
 
                         if (color_code == ColorTemperature.USER_DEFINE) {
-                            nuklear::nk_layout_row_dynamic(ctx, 15, 1);
+                            nuklear::nk_layout_row_dynamic(ctx, 12, 1);
                             nuklear::nk_spacing(ctx, 1);
 
-                            nuklear::nk_layout_row_dynamic(ctx, 20, 1);
-                            nuklear::nk_label(
+                            if (nuklear::nk_group_begin(
                                 ctx,
-                                "RGB Gains",
-                                (uint)Nk_text_alignment.NK_TEXT_LEFT
-                            );
+                                "rgb_group",
+                                (uint)Nk_panel_flags.NK_WINDOW_BORDER
+                                    | (uint)Nk_panel_flags.NK_WINDOW_TITLE
+                            )) {
+                                nuklear::nk_layout_row_dynamic(ctx, 8, 1);
+                                nuklear::nk_spacing(ctx, 1);
 
-                            nuklear::nk_layout_row_dynamic(ctx, 6, 1);
-                            nuklear::nk_spacing(ctx, 1);
+                                nuklear::nk_layout_row_dynamic(ctx, 20, 1);
+                                if (nuklear::nk_slider_float(ctx, 0.0f, &red, 100, 0.01f)) {
+                                    if (@ok(
+                                        bc.try_push(
+                                            {
+                                                .type = CommandType.SET_RED_GAIN,
+                                                .value = { .val = (uint)(red * 100.0f) }
+                                            }
+                                        )
+                                    ));}
 
-                            nuklear::nk_layout_row_dynamic(ctx, 22, 1);
-                            if (nuklear::nk_slider_float(ctx, 0.0f, &red, 100, 0.01f)) {
-                                if (@ok(
-                                    bc.try_push(
-                                        {
-                                            .type = CommandType.SET_RED_GAIN,
-                                            .value = { .val = (uint)(red * 100.0f) }
-                                        }
-                                    )
-                                ));}
+                                nuklear::nk_layout_row_dynamic(ctx, 20, 1);
+                                if (nuklear::nk_slider_float(ctx, 0.0f, &green, 100, 0.01f)) {
+                                    if (@ok(
+                                        bc.try_push(
+                                            {
+                                                .type = CommandType.SET_GREEN_GAIN,
+                                                .value = { .val = (uint)(green * 100.0f), }
+                                            }
+                                        )
+                                    ));}
 
-                            nuklear::nk_layout_row_dynamic(ctx, 22, 1);
-                            if (nuklear::nk_slider_float(ctx, 0.0f, &green, 100, 0.01f)) {
-                                if (@ok(
-                                    bc.try_push(
-                                        {
-                                            .type = CommandType.SET_GREEN_GAIN,
-                                            .value = { .val = (uint)(green * 100.0f), }
-                                        }
-                                    )
-                                ));}
+                                nuklear::nk_layout_row_dynamic(ctx, 20, 1);
+                                if (nuklear::nk_slider_float(ctx, 0.0f, &blue, 100, 0.01f)) {
+                                    if (@ok(
+                                        bc.try_push(
+                                            {
+                                                .type = CommandType.SET_BLUE_GAIN,
+                                                .value = { .val = (uint)(blue * 100.0f) }
+                                            }
+                                        )
+                                    ));}
 
-                            nuklear::nk_layout_row_dynamic(ctx, 22, 1);
-                            if (nuklear::nk_slider_float(ctx, 0.0f, &blue, 100, 0.01f)) {
-                                if (@ok(
-                                    bc.try_push(
-                                        {
-                                            .type = CommandType.SET_BLUE_GAIN,
-                                            .value = { .val = (uint)(blue * 100.0f) }
-                                        }
-                                    )
-                                ));}
+                                nuklear::nk_group_end(ctx);
+                            }
                         }
+
+                        nuklear::nk_group_end(ctx);
                     }
 
-                    nuklear::nk_end(ctx);
+                    nuklear::nk_layout_row_end(ctx);
+                }
 
+                nuklear::nk_end(ctx);
+
+                nuklear::glViewport(0, 0, w, h);
+                nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
+                nuklear::glClear(GL_COLOR_BUFFER_BIT);
+                nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
+                nuklear::sdl_gl_swapwindow(win);
+            } else {
+                int w, h;
+                nuklear::sdl_getwindowsize(win, &w, &h);
+                Nk_rect bounds = nuklear::nk_rect(0, 0, 300, 100);
+                bounds.x = (w - bounds.w) / 2.0f;
+                bounds.y = (h - bounds.h) / 2.0f;
+                if (nuklear::nk_begin(
+                    ctx,
+                    "Loading",
+                    bounds,
+                    (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
+                )) {
+                    nuklear::nk_layout_row_dynamic(ctx, 25, 1);
+                    nuklear::nk_label(
+                        ctx,
+                        "Getting monitor information...",
+                        (uint)Nk_text_alignment.NK_TEXT_CENTERED
+                    );
+
+                    nuklear::nk_layout_row_dynamic(ctx, 20, 1);
+                    nuklear::nk_label(
+                        ctx,
+                        "Please wait...",
+                        (uint)Nk_text_alignment.NK_TEXT_CENTERED
+                    );
+                    nuklear::nk_end(ctx);
                     nuklear::glViewport(0, 0, w, h);
                     nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
                     nuklear::glClear(GL_COLOR_BUFFER_BIT);
                     nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
                     nuklear::sdl_gl_swapwindow(win);
-                } else {
-                    int w, h;
-                    nuklear::sdl_getwindowsize(win, &w, &h);
-                    Nk_rect bounds = nuklear::nk_rect(0, 0, 300, 100);
-                    bounds.x = (w - bounds.w) / 2.0f;
-                    bounds.y = (h - bounds.h) / 2.0f;
-                    if (nuklear::nk_begin(
-                        ctx,
-                        "Loading",
-                        bounds,
-                        (uint)Nk_panel_flags.NK_WINDOW_NO_SCROLLBAR
-                    )) {
-                        nuklear::nk_layout_row_dynamic(ctx, 25, 1);
-                        nuklear::nk_label(
-                            ctx,
-                            "Getting monitor information...",
-                            (uint)Nk_text_alignment.NK_TEXT_CENTERED
-                        );
-
-                        nuklear::nk_layout_row_dynamic(ctx, 20, 1);
-                        nuklear::nk_label(
-                            ctx,
-                            "Please wait...",
-                            (uint)Nk_text_alignment.NK_TEXT_CENTERED
-                        );
-                        nuklear::nk_end(ctx);
-                        nuklear::glViewport(0, 0, w, h);
-                        nuklear::glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
-                        nuklear::glClear(GL_COLOR_BUFFER_BIT);
-                        nuklear::nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
-                        nuklear::sdl_gl_swapwindow(win);
-                    }
                 }
             }
         }
@@ -1008,6 +1049,10 @@ fn void change_stuff(BufferedChannel{MonitorCommand}* bc) {
                         if (next.type == CommandType.SET_VOLUME) volume = next.value.volume;
                     }
                     set_vcp("2", volume, AUDIO_SPEAKER_VOLUME);
+
+                case CommandType.SET_LOW_BLUE_LIGHT_PLUS:
+                    set_vcp("2", (uint)cmd.value.lblp_mode, LOWBLUELIGHTPLUS);
+
                 default:
             }
         }
@@ -1020,9 +1065,7 @@ struct GuiArgs {
 }
 
 fn int main(String[] args) {
-    // VcpInfo s = get_vcp(AUDIO_SPEAKER_VOLUME, "2")!!;
-
-    // io::printn(s);
+    VcpInfo s = get_vcp(AUDIO_MUTE, "2")!!;
 
     // io::printn(color_preset);
 
@@ -1036,24 +1079,24 @@ fn int main(String[] args) {
     // io::printn(Nk_style::size);
     // io::printn(Nk_context::size);
 
-    Thread tg, tb, ts;
-    GuiArgs ga = { };
-    ga.channel = channel::create_buffered(mem, 1024 * 1024)!!;
-    ga.monitor_state_channel = channel::create_buffered(mem, 1024 * 1024)!!;
-    defer ga.monitor_state_channel.destroy();
-    defer ga.channel.destroy();
-
-
-    tg.create((ThreadFn)&gui_thing, &ga)!!;
-    tb.create((ThreadFn)&change_stuff, ga.channel)!!;
-    ts.create((ThreadFn)&load_monitor_state, ga.monitor_state_channel)!!;
-    tg.join()!!;
-    ga.channel.close();
-
-    tb.join()!!;
-    ts.join()!!;
-
-    ga.monitor_state_channel.close();
-
+    // Thread tg, tb, ts;
+    // GuiArgs ga = { };
+    // ga.channel = channel::create_buffered(mem, 1024 * 1024)!!;
+    // ga.monitor_state_channel = channel::create_buffered(mem, 1024 * 1024)!!;
+    // defer ga.monitor_state_channel.destroy();
+    // defer ga.channel.destroy();
+    //
+    //
+    // tg.create((ThreadFn)&gui_thing, &ga)!!;
+    // tb.create((ThreadFn)&change_stuff, ga.channel)!!;
+    // ts.create((ThreadFn)&load_monitor_state, ga.monitor_state_channel)!!;
+    // tg.join()!!;
+    // ga.channel.close();
+    //
+    // tb.join()!!;
+    // ts.join()!!;
+    //
+    // ga.monitor_state_channel.close();
+    //
     return 0;
 }
