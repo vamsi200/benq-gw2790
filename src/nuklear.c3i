@@ -908,6 +908,8 @@ extern fn void nk_layout_row_dynamic(Nk_context* ctx, float height, CInt cols)@c
 extern fn Nk_bool nk_option_label(Nk_context*, CChar*, Nk_bool active) @cname("nk_option_label");
 extern fn void nk_rule_horizontal(Nk_context* ctx,Nk_color color,Nk_bool rounding) @cname("nk_rule_horizontal");
 extern fn void nk_label(Nk_context* ctx, CChar* str, Nk_flags alignment) @cname("nk_label");
+extern fn void nk_labelf(Nk_context *ctx, Nk_flags flags, char *fmt, ...) @cname("nk_labelf");
+
 extern fn void nk_spacing(Nk_context*, CInt cols) @cname("nk_spacing");
 extern fn Nk_bool nk_progress(Nk_context*, Nk_size* cur, Nk_size max, Nk_bool modifyable)
 @cname("nk_progress");
@@ -940,6 +942,32 @@ extern fn Nk_bool nk_button_label(
   Nk_context* ctx,
   CChar* title)
 @cname("nk_button_label");
+
+struct Nk_font {
+    Nk_font*      next;
+    Nk_user_font  handle;
+}
+
+extern fn void nk_style_set_font(
+    Nk_context*,
+    Nk_user_font*
+) @cname("nk_style_set_font");
+
+alias Nk_font_config = void;
+
+extern fn Nk_font* nk_font_atlas_add_from_file(Nk_font_atlas *atlas, char *file_path, float height, Nk_font_config*)@cname("nk_font_atlas_add_from_file");
+
+alias Nk_text_width_f = fn float(
+  Nk_handle,
+  float h,
+  CChar*,
+  CInt len);
+
+struct Nk_user_font {
+  Nk_handle userdata;
+  float height;
+  Nk_text_width_f width;
+}
 
 extern fn Nk_bool nk_button_symbol_label(
   Nk_context*,

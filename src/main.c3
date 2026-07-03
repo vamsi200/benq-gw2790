@@ -8,11 +8,142 @@ import std::thread::channel;
 import libc;
 import std::collections::map;
 
+const uint SDL_WINDOWPOS_CENTERED = 0x2FFF0000;
+const uint SDL_QUIT               = 0x100;
+const uint GL_COLOR_BUFFER_BIT    = 0x00004000;
+
+struct GuiArgs {
+    BufferedChannel{MonitorCommand}* channel;
+    BufferedChannel{MonitorState}* monitor_state_channel;
+}
+
+struct Monitor_state_args {
+    String bus;
+    BufferedChannel{MonitorState}* monitor_state_channel;
+}
+
+struct DisplayModes {
+    String name;
+    DisplayMode mode;
+}
+
+struct TemperatureModes {
+    String name;
+    ColorTemperature mode;
+}
+
+struct LowBlueLightPlusModes {
+    String name;
+    LowBlueLightPlus mode;
+}
+
+struct GenericOne {
+    String name;
+    uint val;
+}
+
+constdef CommandType : uint {
+    SET_BRIGHTNESS,
+    SET_COLOR_MODE,
+    SET_CONTRAST,
+    SET_COLOR_PRESET,
+    SET_VOLUME,
+    // SET_RED_GAIN,
+
+    // SET_GREEN_GAIN,
+
+    // SET_BLUE_GAIN,
+
+
+    SET_LOW_BLUE_LIGHT_PLUS,
+    SET_AUDIO_MUTE,
+    SET_BI_GEN2,
+    SET_AMA,
+    SET_SHARPNESS
+}
+
+union CommandValue {
+    uint brightness;
+    DisplayMode mode;
+    LowBlueLightPlus lblp_mode;
+    uint contrast;
+    uint val;
+    uint volume;
+    ColorTemperature color_temp;
+    uint audio_mute;
+    uint bi_gen2;
+    uint ama;
+    uint sharpness;
+}
+
+struct MonitorCommand {
+    CommandType type;
+    CommandValue value;
+}
+
+const float ROW_LABEL   = 22.0f;
+const float ROW_CONTROL = 25.0f;
+const float ROW_BUTTON  = 26.0f;
+const float SPACER_XS   = 8.0f;
+const float SPACER_SM   = 10.0f;
+const float SPACER_MD   = 14.0f;
+const float SPACER_LOAD = 20.0f;
+
+const float COL_LEFT_RATIO  = 0.58f;
+const float COL_RIGHT_RATIO = 0.42f;
+
+const float RGB_SLIDER_MAX  = 100.0f;
+const float RGB_SLIDER_STEP = 0.01f;
+
+const uint AUDIO_MUTE_VALUE = 0x01;
+const float TAB_HEIGHT      = 30.0f;
+
+enum GuiTab : int {
+    DISPLAY,
+    MODE,
+    AUDIO,
+    SYSTEM_INFORMATION,
+}
+
+constdef Ama : uint {
+    OFF     = 0x00,
+    HIGH    = 0x01,
+    PREMIUM = 0x02,
+}
+
+struct AmaModes {
+    String name;
+    Ama mode;
+}
+
+struct GuiTabDef {
+    String name;
+    GuiTab tab;
+}
+
+enum SystemInfoState {
+    NOT_FETCHED,
+    FETCHING,
+    FETCHED
+}
+
 struct Monitor {
+    String device_path;
     String model;
     String manufacturer;
 
-    String device_path; // /dev/i2c-*
+    String horizontal_frequency_hz;
+    String vertical_frequency_hz;
+    String subpixel_layout;
+    String technology_type;
+    String usage_time_hours;
+    String controller_type;
+    String firmware_level;
+    String osd_control;
+    String osd_language;
+    String power_mode;
+    String scan_mode;
+    String vcp_version;
 }
 
 enum InputSource {
@@ -26,6 +157,117 @@ struct ColorGain {
     int green;
     int blue;
 }
+
+const String CACHE_PATH = "/tmp/benq_monitor_cache";
+
+// Image Controls
+const BRIGHTNESS          = "0x10";
+const CONTRAST            = "0x12";
+const SELECT_COLOR_PRESET = "0x14";
+
+const VIDEO_GAIN_RED   = "0x16";
+const VIDEO_GAIN_GREEN = "0x18";
+const VIDEO_GAIN_BLUE  = "0x1A";
+
+const String[*] VIDEO_GAIN_RGB = { VIDEO_GAIN_RED, VIDEO_GAIN_GREEN, VIDEO_GAIN_BLUE, };
+
+// Geometry
+const HORIZONTAL_POSITION = "0x20";
+const VERTICAL_POSITION   = "0x30";
+
+
+// Active Control
+const ACTIVE_CONTROL = "0x52";
+
+
+// 6-Axis Saturation
+const SATURATION_RED     = "0x59";
+const SATURATION_YELLOW  = "0x5A";
+const SATURATION_GREEN   = "0x5B";
+const SATURATION_CYAN    = "0x5C";
+const SATURATION_BLUE    = "0x5D";
+const SATURATION_MAGENTA = "0x5E";
+
+// off - 0x00, on - 0xff
+const BIGEN2 = "0xe2";
+
+const String[*] SATURATION_RYGCBM = {
+    SATURATION_RED,
+    SATURATION_YELLOW,
+    SATURATION_GREEN,
+    SATURATION_CYAN,
+    SATURATION_BLUE,
+    SATURATION_MAGENTA,
+};
+
+
+const LOWBLUELIGHTPLUS = "0x19";
+
+// Input / Audio
+const INPUT_SOURCE         = "0x60";
+const AUDIO_SPEAKER_VOLUME = "0x62";
+// Mute - sl=0x01, UnMute - sl=0x02
+
+
+
+const AUDIO_MUTE = "0x8D";
+
+// Doesn't work :/
+// // 0x1c - Dialogue, 0x00 - Music, 0x21 - Standard
+// const AUDIO_MODE = "0xe1";
+// Video Black Level
+const VIDEO_BLACK_LEVEL_RED   = "0x6C";
+const VIDEO_BLACK_LEVEL_GREEN = "0x6E";
+const VIDEO_BLACK_LEVEL_BLUE  = "0x70";
+
+const String[*] VIDEO_BLACK_LEVEL_RGB = {
+    VIDEO_BLACK_LEVEL_RED,
+    VIDEO_BLACK_LEVEL_GREEN,
+    VIDEO_BLACK_LEVEL_BLUE,
+};
+
+// Display Processing
+const GAMMA               = "0x72";
+const DISPLAY_SCALING     = "0x86";
+const SHARPNESS           = "0x87";
+const TV_COLOR_SATURATION = "0x8A";
+
+// Hue Controls
+const HUE = "0x90";
+
+const HUE_RED     = "0x9B";
+const HUE_YELLOW  = "0x9C";
+const HUE_GREEN   = "0x9D";
+const HUE_CYAN    = "0x9E";
+const HUE_BLUE    = "0x9F";
+const HUE_MAGENTA = "0xA0";
+
+const String[*] HUE_RYGCBM = { HUE_RED, HUE_YELLOW, HUE_GREEN, HUE_CYAN, HUE_BLUE, HUE_MAGENTA, };
+
+// Timing Information
+const HORIZONTAL_FREQUENCY = "0xAC";
+const VERTICAL_FREQUENCY   = "0xAE";
+
+// Display Information
+const FLAT_PANEL_SUBPIXEL_LAYOUT = "0xB2";
+const DISPLAY_TECHNOLOGY_TYPE    = "0xB6";
+const DISPLAY_USAGE_TIME         = "0xC0";
+const DISPLAY_DESCRIPTOR_LENGTH  = "0xC2";
+const APPLICATION_ENABLE_KEY     = "0xC6";
+const DISPLAY_CONTROLLER_TYPE    = "0xC8";
+const DISPLAY_FIRMWARE_LEVEL     = "0xC9";
+
+// OSD
+const OSD          = "0xCA";
+const OSD_LANGUAGE = "0xCC";
+
+// Power
+const POWER_MODE   = "0xD6";
+const SCAN_FORMAT  = "0xDA";
+const DISPLAY_MODE = "0xDC";
+
+// Protocol
+const VCP_VERSION = "0xDF";
 
 constdef DisplayMode : uint {
     M_BOOK    = 0x0f,
@@ -64,7 +306,6 @@ struct MonitorState {
     uint ama;
     uint sharpness;
     // InputSource input;
-    // 
     // ColorGain gain;
 }
 
@@ -77,8 +318,6 @@ struct MonitorState {
 const COLOR_TEMPERATURE_REQUEST = "0x0c";
 // Well this ain't working, we have to write to 0x0c, values are:
 
-
-
 // 28 - 5000K - Reddish - 0x04
 
 // 35 - 6500K - Normal - 0x05
@@ -86,6 +325,7 @@ const COLOR_TEMPERATURE_REQUEST = "0x0c";
 // 63 - 9300K - Bluish - 0x08
 
 // 35 * (r,g,b) - UserDefine - 0x0b
+
 
 // Off - 0x00
 // High - 0x01
@@ -288,7 +528,7 @@ fn HashMap{String, VcpInfo}? get_vcp(String[] codes, String bus) => @pool() {
 //     return ud;
 // }
 
-fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel) {
+fn bool load_monitor_state(Monitor_state_args* args) {
     LibcAllocator libc;
 
     @pool_init(&libc, 1024) {
@@ -307,7 +547,7 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
                 AMA,
                 SHARPNESS
             },
-            "2"
+            args.bus
         )!!;
 
         VcpInfo? brightness          = vcps.get("0x10");
@@ -346,7 +586,7 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
         ms.color_temperature = color_preset.value.data.color_val.preset;
         ms.volume = volume.value.data.raw_val;
 
-        if (@ok(monitor_state_channel.push(ms))) return true;
+        if (@ok(args.monitor_state_channel.push(ms))) return true;
         return false;
     };
 }
@@ -409,136 +649,156 @@ fn bool set_vcp(String bus, uint val, String code) => @pool() {
     return true;
 }
 
-// Image Controls
-const BRIGHTNESS          = "0x10";
-const CONTRAST            = "0x12";
-const SELECT_COLOR_PRESET = "0x14";
-
-const VIDEO_GAIN_RED   = "0x16";
-const VIDEO_GAIN_GREEN = "0x18";
-const VIDEO_GAIN_BLUE  = "0x1A";
-
-const String[*] VIDEO_GAIN_RGB = { VIDEO_GAIN_RED, VIDEO_GAIN_GREEN, VIDEO_GAIN_BLUE, };
-
-// Geometry
-const HORIZONTAL_POSITION = "0x20";
-const VERTICAL_POSITION   = "0x30";
+fn String parse_enum_value(String value) {
+    long? idx = value.rindex_of("(sl=");
+    if (catch idx) return value.trim();
+    return value[:idx].trim();
+}
 
 
-// Active Control
-const ACTIVE_CONTROL = "0x52";
+fn bool load_static_info(Allocator alloc, Monitor* monitor) {
+    char[]? contents = file::load_temp(CACHE_PATH);
+    if (catch contents) return false;
+    String text = (String)contents;
 
+    foreach (raw_line : text.tsplit("\n")) {
+        String line = raw_line.trim();
+        if (line.len == 0) continue;
 
-// 6-Axis Saturation
-const SATURATION_RED     = "0x59";
-const SATURATION_YELLOW  = "0x5A";
-const SATURATION_GREEN   = "0x5B";
-const SATURATION_CYAN    = "0x5C";
-const SATURATION_BLUE    = "0x5D";
-const SATURATION_MAGENTA = "0x5E";
+        long? idx = line.index_of("=");
+        if (catch idx) continue;
 
-// off - 0x00, on - 0xff
-const BIGEN2 = "0xe2";
+        String key   = line[:idx].trim();
+        String value = line[idx + 1..].trim();
 
-const String[*] SATURATION_RYGCBM = {
-    SATURATION_RED,
-    SATURATION_YELLOW,
-    SATURATION_GREEN,
-    SATURATION_CYAN,
-    SATURATION_BLUE,
-    SATURATION_MAGENTA,
-};
+        switch (key) {
+            case "device_path": monitor.device_path = value.copy(alloc);
+            case "model": monitor.model = value.copy(alloc);
+            case "manufacturer": monitor.manufacturer = value.copy(alloc);
+            case "subpixel_layout": monitor.subpixel_layout = value.copy(alloc);
+            case "technology_type": monitor.technology_type = value.copy(alloc);
+            case "controller_type": monitor.controller_type = value.copy(alloc);
+            case "firmware_level": monitor.firmware_level = value.copy(alloc);
+            case "vcp_version": monitor.vcp_version = value.copy(alloc);
+            default: continue;
+        }
+    }
+    return true;
+}
 
+fn void save_static_info(Monitor* monitor) {
+    DString out;
+    out.init(tmem);
+    out.appendf("device_path=%s\n", monitor.device_path);
+    out.appendf("model=%s\n", monitor.model);
+    out.appendf("manufacturer=%s\n", monitor.manufacturer);
+    out.appendf("subpixel_layout=%s\n", monitor.subpixel_layout);
+    out.appendf("technology_type=%s\n", monitor.technology_type);
+    out.appendf("controller_type=%s\n", monitor.controller_type);
+    out.appendf("firmware_level=%s\n", monitor.firmware_level);
+    out.appendf("vcp_version=%s\n", monitor.vcp_version);
 
-const LOWBLUELIGHTPLUS = "0x19";
+    (void)file::save(CACHE_PATH, out.str_view());
+}
 
-// Input / Audio
-const INPUT_SOURCE         = "0x60";
-const AUDIO_SPEAKER_VOLUME = "0x62";
-// Mute - sl=0x01, UnMute - sl=0x02
+fn void fetch_dynamic_vcp_info(Allocator alloc, Monitor* monitor) => @pool() {
+    char[4096] vcp_buf;
+    String? vcp_output = process::run_capture_stdout(&vcp_buf, {
+        "ddcutil", "getvcp",
+        HORIZONTAL_FREQUENCY, VERTICAL_FREQUENCY,
+        FLAT_PANEL_SUBPIXEL_LAYOUT, DISPLAY_TECHNOLOGY_TYPE,
+        DISPLAY_USAGE_TIME, DISPLAY_DESCRIPTOR_LENGTH,
+        APPLICATION_ENABLE_KEY, DISPLAY_CONTROLLER_TYPE,
+        DISPLAY_FIRMWARE_LEVEL, OSD, OSD_LANGUAGE,
+        POWER_MODE, SCAN_FORMAT, VCP_VERSION,
+        "--bus", monitor.device_path
+        });
+    if (catch vcp_output) abort("Failed to get monitor VCP information");
 
+    String remaining = vcp_output;
+    while (remaining.len > 0) {
+        long? nl = remaining.index_of("\n");
+        String raw_line;
+        if (catch nl) {
+            raw_line = remaining;
+            remaining = "";
+        } else {
+            raw_line = remaining[:nl];
+            remaining = remaining[nl + 1..];
+        }
 
+        String line = raw_line.trim();
+        if (line.len < 13) continue;
 
-const AUDIO_MUTE = "0x8D";
+        String code = line[9..12];
 
-// Doesn't work :/
-// // 0x1c - Dialogue, 0x00 - Music, 0x21 - Standard
-// const AUDIO_MODE = "0xe1";
+        long? sep = line.index_of("): ");
+        if (catch sep) continue;
+        String value = line[sep + 3..].trim();
 
-// Video Black Level
-const VIDEO_BLACK_LEVEL_RED   = "0x6C";
-const VIDEO_BLACK_LEVEL_GREEN = "0x6E";
-const VIDEO_BLACK_LEVEL_BLUE  = "0x70";
+        switch (code) {
+            case "0xac":
+                long? sp = value.index_of(" ");
+                if (catch sp) continue;
+                monitor.horizontal_frequency_hz = value[:sp].copy(alloc);
+            case "0xae":
+                long? sp = value.index_of(" ");
+                if (catch sp) continue;
+                monitor.vertical_frequency_hz = value[:sp].copy(alloc);
+            case "0xc0":
+                long? eq = value.index_of("= ");
+                long? paren = value.rindex_of(" (");
+                if (catch eq) continue;
+                if (catch paren) continue;
+                monitor.usage_time_hours = value[eq + 2..paren - 1].trim().copy(alloc);
+            case "0xca":
+                monitor.osd_control = value.copy(alloc);
+            case "0xcc":
+                monitor.osd_language = parse_enum_value(value).copy(alloc);
+            case "0xd6":
+                monitor.power_mode = value.copy(alloc);
+            case "0xda":
+                monitor.scan_mode = parse_enum_value(value).copy(alloc);
+            default:
+                continue;
+        }
+    }
+}
 
-const String[*] VIDEO_BLACK_LEVEL_RGB = {
-    VIDEO_BLACK_LEVEL_RED,
-    VIDEO_BLACK_LEVEL_GREEN,
-    VIDEO_BLACK_LEVEL_BLUE,
-};
-
-// Display Processing
-const GAMMA               = "0x72";
-const DISPLAY_SCALING     = "0x86";
-const SHARPNESS           = "0x87";
-const TV_COLOR_SATURATION = "0x8A";
-
-// Hue Controls
-const HUE = "0x90";
-
-const HUE_RED     = "0x9B";
-const HUE_YELLOW  = "0x9C";
-const HUE_GREEN   = "0x9D";
-const HUE_CYAN    = "0x9E";
-const HUE_BLUE    = "0x9F";
-const HUE_MAGENTA = "0xA0";
-
-const String[*] HUE_RYGCBM = { HUE_RED, HUE_YELLOW, HUE_GREEN, HUE_CYAN, HUE_BLUE, HUE_MAGENTA, };
-
-// Timing Information
-const HORIZONTAL_FREQUENCY = "0xAC";
-const VERTICAL_FREQUENCY   = "0xAE";
-
-// Display Information
-const FLAT_PANEL_SUBPIXEL_LAYOUT = "0xB2";
-const DISPLAY_TECHNOLOGY_TYPE    = "0xB6";
-const DISPLAY_USAGE_TIME         = "0xC0";
-const DISPLAY_DESCRIPTOR_LENGTH  = "0xC2";
-const APPLICATION_ENABLE_KEY     = "0xC6";
-const DISPLAY_CONTROLLER_TYPE    = "0xC8";
-const DISPLAY_FIRMWARE_LEVEL     = "0xC9";
-
-// OSD
-const OSD          = "0xCA";
-const OSD_LANGUAGE = "0xCC";
-
-// Power
-const POWER_MODE   = "0xD6";
-const SCAN_FORMAT  = "0xDA";
-const DISPLAY_MODE = "0xDC";
-
-// Protocol
-const VCP_VERSION = "0xDF";
-
-fn Monitor detect_monitor() => @pool() {
+fn Monitor detect_monitor(Allocator alloc, bool force_refresh = false) => @pool() {
     Monitor monitor;
 
-    char[4096] buf;
-    String? output = process::run_capture_stdout(&buf, { "ddcutil", "detect" });
+    if (!force_refresh && load_static_info(alloc, &monitor)) {
+        fetch_dynamic_vcp_info(alloc, &monitor);
+        return monitor;
+    }
 
-    if (catch output) abort("Failed to get monitor information");
+    char[4096] detect_buf;
 
-    bool in_display = false;
+    String? detect_output = process::run_capture_stdout(&detect_buf, { "ddcutil", "detect" });
+    if (catch detect_output) abort("Failed to get monitor information");
 
-    foreach (raw_line : output.split(tmem, "\n")) {
+    bool in_display  = false;
+    String remaining = detect_output;
+
+    while (remaining.len > 0) {
+        long? nl = remaining.index_of("\n");
+        String raw_line;
+        if (catch nl) {
+            raw_line = remaining;
+            remaining = "";
+        } else {
+            raw_line = remaining[:nl];
+            remaining = remaining[nl + 1..];
+        }
+
         String line = raw_line.trim();
 
         if (line.starts_with("Display ")) {
             in_display = true;
             continue;
         }
-
         if (!in_display) continue;
-
         if (line.starts_with("Invalid display")) break;
 
         long? idx = line.index_of(":");
@@ -549,124 +809,149 @@ fn Monitor detect_monitor() => @pool() {
 
         switch (key) {
             case "I2C bus":
-                monitor.device_path = value;
-
+                long? dash = value.rindex_of("-");
+                if (catch dash) continue;
+                monitor.device_path = value[dash + 1..].trim().copy(alloc);
             case "Model":
-                monitor.model = value;
-
+                monitor.model = value.copy(alloc);
             case "Mfg id":
-                monitor.manufacturer = value;
-
+                monitor.manufacturer = value.copy(alloc);
             default:
                 continue;
         }
     }
 
+    char[4096] vcp_buf;
+    String? vcp_output = process::run_capture_stdout(&vcp_buf, {
+        "ddcutil", "getvcp",
+        HORIZONTAL_FREQUENCY, VERTICAL_FREQUENCY,
+        FLAT_PANEL_SUBPIXEL_LAYOUT, DISPLAY_TECHNOLOGY_TYPE,
+        DISPLAY_USAGE_TIME, DISPLAY_DESCRIPTOR_LENGTH,
+        APPLICATION_ENABLE_KEY, DISPLAY_CONTROLLER_TYPE,
+        DISPLAY_FIRMWARE_LEVEL, OSD, OSD_LANGUAGE,
+        POWER_MODE, SCAN_FORMAT, VCP_VERSION,
+        "--bus", monitor.device_path
+        });
+    if (catch vcp_output) abort("Failed to get monitor VCP information");
+
+    remaining = vcp_output;
+    while (remaining.len > 0) {
+        long? nl = remaining.index_of("\n");
+        String raw_line;
+        if (catch nl) {
+            raw_line = remaining;
+            remaining = "";
+        } else {
+            raw_line = remaining[:nl];
+            remaining = remaining[nl + 1..];
+        }
+
+        String line = raw_line.trim();
+        if (line.len < 13) continue;
+
+        String code = line[9..12];
+
+        long? sep = line.index_of("): ");
+        if (catch sep) continue;
+        String value = line[sep + 3..].trim();
+
+        switch (code) {
+            case "0xac":
+                long? sp = value.index_of(" ");
+                if (catch sp) continue;
+                monitor.horizontal_frequency_hz = value[:sp];
+            case "0xae":
+                long? sp = value.index_of(" ");
+                if (catch sp) continue;
+                monitor.vertical_frequency_hz = value[:sp].copy(alloc);
+            case "0xb2":
+                monitor.subpixel_layout = parse_enum_value(value).copy(alloc);
+            case "0xb6":
+                monitor.technology_type = parse_enum_value(value).copy(alloc);
+            case "0xc0":
+                long? eq = value.index_of("= ");
+                long? paren = value.rindex_of(" (");
+                if (catch eq) continue;
+                if (catch paren) continue;
+                monitor.usage_time_hours = value[eq + 2..paren - 1].trim().copy(alloc);
+            case "0xc8":
+                monitor.controller_type = value.copy(alloc);
+            case "0xc9":
+                monitor.firmware_level = value.copy(alloc);
+            case "0xca":
+                monitor.osd_control = value.copy(alloc);
+            case "0xcc":
+                monitor.osd_language = parse_enum_value(value);
+            case "0xd6":
+                monitor.power_mode = value.copy(alloc);
+            case "0xda":
+                monitor.scan_mode = parse_enum_value(value);
+            case "0xdf":
+                monitor.vcp_version = value.copy(alloc);
+            default:
+                continue;
+        }
+    }
+
+    save_static_info(&monitor);
     return monitor;
 }
 
+fn void render_monitor_info(Nk_context* ctx, Monitor* monitor) {
+    nuklear::nk_layout_row_dynamic(ctx, 25, 2);
 
-const uint SDL_WINDOWPOS_CENTERED = 0x2FFF0000;
-const uint SDL_QUIT               = 0x100;
-const uint GL_COLOR_BUFFER_BIT    = 0x00004000;
+    nuklear::nk_label(ctx, "Device Path", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.device_path, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-struct DisplayModes {
-    String name;
-    DisplayMode mode;
-}
+    nuklear::nk_label(ctx, "Model", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.model, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-struct TemperatureModes {
-    String name;
-    ColorTemperature mode;
-}
+    nuklear::nk_label(ctx, "Manufacturer", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.manufacturer, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-struct LowBlueLightPlusModes {
-    String name;
-    LowBlueLightPlus mode;
-}
+    nuklear::nk_label(ctx, "Horizontal Frequency", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(
+        ctx,
+        (CChar*)monitor.horizontal_frequency_hz,
+        (uint)Nk_text_alignment.NK_TEXT_RIGHT
+    );
 
-struct GenericOne {
-    String name;
-    uint val;
-}
+    nuklear::nk_label(ctx, "Vertical Frequency", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(
+        ctx,
+        (CChar*)monitor.vertical_frequency_hz,
+        (uint)Nk_text_alignment.NK_TEXT_RIGHT
+    );
 
-constdef CommandType : uint {
-    SET_BRIGHTNESS,
-    SET_COLOR_MODE,
-    SET_CONTRAST,
-    SET_COLOR_PRESET,
-    SET_VOLUME,
-    // SET_RED_GAIN,
+    nuklear::nk_label(ctx, "Subpixel Layout", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.subpixel_layout, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
+    nuklear::nk_label(ctx, "Technology Type", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.technology_type, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
+    nuklear::nk_label(ctx, "Usage Time (hrs)", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.usage_time_hours, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-    // SET_GREEN_GAIN,
+    nuklear::nk_label(ctx, "Controller Type", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.controller_type, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-    // SET_BLUE_GAIN,
+    nuklear::nk_label(ctx, "Firmware Level", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.firmware_level, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-    SET_LOW_BLUE_LIGHT_PLUS,
-    SET_AUDIO_MUTE,
-    SET_BI_GEN2,
-    SET_AMA,
-    SET_SHARPNESS
-}
+    nuklear::nk_label(ctx, "OSD Control", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.osd_control, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-union CommandValue {
-    uint brightness;
-    DisplayMode mode;
-    LowBlueLightPlus lblp_mode;
-    uint contrast;
-    uint val;
-    uint volume;
-    ColorTemperature color_temp;
-    uint audio_mute;
-    uint bi_gen2;
-    uint ama;
-    uint sharpness;
-}
+    nuklear::nk_label(ctx, "OSD Language", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.osd_language, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-struct MonitorCommand {
-    CommandType type;
-    CommandValue value;
-}
+    nuklear::nk_label(ctx, "Power Mode", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.power_mode, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-const float ROW_LABEL   = 22.0f;
-const float ROW_CONTROL = 25.0f;
-const float ROW_BUTTON  = 26.0f;
-const float SPACER_XS   = 8.0f;
-const float SPACER_SM   = 10.0f;
-const float SPACER_MD   = 14.0f;
-const float SPACER_LOAD = 20.0f;
+    nuklear::nk_label(ctx, "Scan Mode", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.scan_mode, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 
-const float COL_LEFT_RATIO  = 0.58f;
-const float COL_RIGHT_RATIO = 0.42f;
-
-const float RGB_SLIDER_MAX  = 100.0f;
-const float RGB_SLIDER_STEP = 0.01f;
-
-const uint AUDIO_MUTE_VALUE = 0x01;
-const float TAB_HEIGHT      = 30.0f;
-
-enum GuiTab : int {
-    DISPLAY,
-    MODE,
-    AUDIO,
-}
-
-constdef Ama : uint {
-    OFF     = 0x00,
-    HIGH    = 0x01,
-    PREMIUM = 0x02,
-}
-
-struct AmaModes {
-    String name;
-    Ama mode;
-}
-
-struct GuiTabDef {
-    String name;
-    GuiTab tab;
+    nuklear::nk_label(ctx, "VCP Version", (uint)Nk_text_alignment.NK_TEXT_LEFT);
+    nuklear::nk_label(ctx, (CChar*)monitor.vcp_version, (uint)Nk_text_alignment.NK_TEXT_RIGHT);
 }
 
 fn void gui_thing(GuiArgs* args) {
@@ -701,9 +986,18 @@ fn void gui_thing(GuiArgs* args) {
         nuklear::glewinit();
 
         Nk_context* ctx = nuklear::nk_sdl_init(win);
-        nuklear::Nk_font_atlas* atlas;
+        Nk_font_atlas* atlas;
+        Nk_font* font;
         nuklear::nk_sdl_font_stash_begin(&atlas);
+        font = nuklear::nk_font_atlas_add_from_file(
+            atlas,
+            "./IosevkaNerdFont-Regular.ttf",
+            16.0f,
+            null
+        );
+
         nuklear::nk_sdl_font_stash_end();
+        nuklear::nk_style_set_font(ctx, &font.handle);
 
         uint brightness, max_brightness, contrast, max_contrast;
         DisplayMode display_code;
@@ -723,6 +1017,7 @@ fn void gui_thing(GuiArgs* args) {
             { "Display", GuiTab.DISPLAY },
             { "Mode", GuiTab.MODE },
             { "Audio", GuiTab.AUDIO },
+            { "System Information", GuiTab.SYSTEM_INFORMATION }
         };
 
         DisplayModes[] display_modes = {
@@ -757,6 +1052,9 @@ fn void gui_thing(GuiArgs* args) {
             { "High", Ama.HIGH },
             { "Premium", Ama.PREMIUM }
         };
+
+        SystemInfoState system_info_state = NOT_FETCHED;
+        Monitor system_info_cache;
 
         Ama ama_mode;
         while (running) {
@@ -1302,6 +1600,32 @@ fn void gui_thing(GuiArgs* args) {
                                     if (audio_is_muted) nuklear::nk_widget_disable_end(ctx);
                                     break;
                                 }
+
+                            case GuiTab.SYSTEM_INFORMATION:
+                                switch (system_info_state) {
+                                    case NOT_FETCHED:
+                                        nuklear::nk_layout_row_dynamic(ctx, 30, 1);
+                                        nuklear::nk_label(
+                                            ctx,
+                                            "Fetching monitor information...",
+                                            (uint)Nk_text_alignment.NK_TEXT_CENTERED
+                                        );
+                                        system_info_state = FETCHING;
+
+                                    case FETCHING:
+                                        nuklear::nk_layout_row_dynamic(ctx, 30, 1);
+                                        nuklear::nk_label(
+                                            ctx,
+                                            "Fetching monitor information...",
+                                            (uint)Nk_text_alignment.NK_TEXT_CENTERED
+                                        );
+
+                                        system_info_cache = detect_monitor(&libc);
+                                        system_info_state = FETCHED;
+
+                                    case FETCHED:
+                                        render_monitor_info(ctx, &system_info_cache);
+                                }
                         }
                         nuklear::nk_group_end(ctx);
                     }
@@ -1454,44 +1778,78 @@ fn void change_stuff(BufferedChannel{MonitorCommand}* bc) {
     };
 }
 
-struct GuiArgs {
-    BufferedChannel{MonitorCommand}* channel;
-    BufferedChannel{MonitorState}* monitor_state_channel;
+fn String get_bus(Allocator alloc) => @pool() {
+    char[4096] detect_buf;
+
+    String? detect_output = process::run_capture_stdout(&detect_buf, { "ddcutil", "detect" });
+    if (catch detect_output) abort("Failed to bus");
+
+    bool in_display  = false;
+    String remaining = detect_output;
+    String device_path;
+
+    while (remaining.len > 0) {
+        long? nl = remaining.index_of("\n");
+        String raw_line;
+        if (catch nl) {
+            raw_line = remaining;
+            remaining = "";
+        } else {
+            raw_line = remaining[:nl];
+            remaining = remaining[nl + 1..];
+        }
+
+        String line = raw_line.trim();
+
+        if (line.starts_with("Display ")) {
+            in_display = true;
+            continue;
+        }
+
+        if (!in_display) continue;
+        if (line.starts_with("Invalid display")) break;
+
+        long? idx = line.index_of(":");
+        if (catch idx) continue;
+
+        String key   = line[:idx].trim();
+        String value = line[idx + 1..].trim();
+
+        switch (key) {
+            case "I2C bus":
+                long? dash = value.rindex_of("-");
+                if (catch dash) continue;
+                device_path = value[dash + 1..].trim().copy(alloc);
+                break;
+            default:
+                continue;
+        }
+    }
+
+    return device_path;
 }
-
-fn int main(String[] args) {
-    // VcpInfo s = get_vcp(AMA, "2")!!;
-    // 
-    // io::printn(s.value);
-
-    // UserDefine ud = get_user_define_vals();
-
-    // io::printn(ud);
-
-
-    // io::printn(Nk_style_slider::size);
-    // io::printn(Nk_style_button::size);
-    // io::printn(Nk_style::size);
-    // io::printn(Nk_context::size);
-    // 
+fn int main(String[] args) => @pool() {
     Thread tg, tb, ts;
     GuiArgs ga = { };
-    ga.channel = channel::create_buffered(mem, 1024 * 1024)!!;
-    ga.monitor_state_channel = channel::create_buffered(mem, 1024 * 1024)!!;
+    ga.channel = channel::create_buffered(tmem, 1024 * 1024)!!;
+    ga.monitor_state_channel = channel::create_buffered(tmem, 1024 * 1024)!!;
     defer ga.monitor_state_channel.destroy();
     defer ga.channel.destroy();
 
+    Monitor_state_args msa = { };
+    msa.bus = get_bus(tmem);
+    msa.monitor_state_channel = ga.monitor_state_channel;
 
     tg.create((ThreadFn)&gui_thing, &ga)!!;
+    ts.create((ThreadFn)&load_monitor_state, &msa)!!;
     tb.create((ThreadFn)&change_stuff, ga.channel)!!;
-    ts.create((ThreadFn)&load_monitor_state, ga.monitor_state_channel)!!;
+
+
     tg.join()!!;
     ga.channel.close();
-
-    tb.join()!!;
     ts.join()!!;
+    tb.join()!!;
 
     ga.monitor_state_channel.close();
-    // 
     return 0;
 }
