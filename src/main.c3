@@ -6,6 +6,7 @@ import nuklear;
 import nuklear_sdl_gl3;
 import std::thread::channel;
 import libc;
+import std::collections::map;
 
 struct Monitor {
     String model;
@@ -143,25 +144,30 @@ struct VcpInfo {
 
 faultdef CMD_RUN_FAILED;
 
-fn VcpInfo? get_vcp(String code, String bus) => @pool() {
-    char[1024] buf;
+fn String[] build_cmd(Allocator alloc, String[] cmd, String bus) {
+    List{String} args = { };
+    args.push("ddcutil");
+    args.push("getvcp");
 
-    String? output   = process::run_capture_stdout(
-        &buf,
-        { "ddcutil", "getvcp", code, "--bus", bus }
-    );
+    foreach (c : cmd) {
+        args.push(c);
+    }
+
+    args.push("--bus");
+    args.push(bus);
+
+    return args.to_array(alloc);
+}
+
+
+fn VcpInfo? parse_vcp_line(String line) {
     VcpInfo vcp_info = { };
     VcpValue vcp_val = { };
 
-    if (catch output) return CMD_RUN_FAILED~;
+    line = line.trim();
 
-    String line = output.trim();
     if (line.contains("current value") && line.contains("max value")) {
-        long? idx1 = line.index_of("(")!;
-        long? idx2 = line.index_of(")")!;
-
         vcp_val.kind = VcpKind.RANGE;
-        vcp_info.code = code;
 
         String[] parts = line.split(tmem, ",");
         vcp_val.data.range_val[0] = parts[0].split(tmem, "=")[1].trim().to_uint()!;
@@ -174,14 +180,12 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
         long? idx2 = line.rindex_of(")")!;
 
         vcp_val.kind = VcpKind.ENUM_VAL;
-        vcp_info.code = code;
         vcp_val.data.enum_val = line[idx + 1..idx2 - 1]!;
         vcp_info.value = vcp_val;
     }
 
     if (line.contains("0x14")) {
         vcp_val.kind = VcpKind.ENUM_VAL;
-        vcp_info.code = code;
 
         if (line.contains("6500")) {
             vcp_val.data.color_val.preset = NORMAL;
@@ -190,19 +194,12 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
         } else if (line.contains("9300")) {
             vcp_val.data.color_val.preset = BLUISH;
         }
-        // else {
-        //     vcp_val.data.color_val.rgb = get_user_define_vals();
-        //     vcp_val.data.color_val.preset = USER_DEFINE;
-        //     vcp_info.name = "User Define";
-        // }
 
         vcp_info.value = vcp_val;
     }
 
     if (line.contains("0x62")) {
         vcp_val.kind = VcpKind.RAW;
-
-        vcp_info.code = code;
 
         if (!line.contains("default")) {
             long? idx  = line.rindex_of(":");
@@ -219,7 +216,6 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
 
     if (line.contains("0x19")) {
         vcp_val.kind = VcpKind.ENUM_VAL;
-        vcp_info.code = code;
         long? idx = line.rindex_of("=");
         if (catch idx) vcp_val.data.enum_val = "0";
         vcp_val.data.enum_val = line[idx + 1..]!.trim();
@@ -228,7 +224,6 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
 
     if (line.contains("0x8d")) {
         vcp_val.kind = VcpKind.RAW;
-        vcp_info.code = code;
         String[] parts = line.tsplit(",");
         vcp_val.data.raw_val = parts[0].tsplit("=")[1].strip_suffix(")").trim().to_uint()!;
         vcp_info.value = vcp_val;
@@ -236,7 +231,6 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
 
     if (line.contains("0xe2")) {
         vcp_val.kind = VcpKind.RAW;
-        vcp_info.code = code;
         long? idx = line.rindex_of("=");
         if (catch idx) vcp_val.data.raw_val = 0;
         vcp_val.data.raw_val = line[idx + 1..]!.trim().to_uint()!;
@@ -245,7 +239,6 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
 
     if (line.contains("0xf0")) {
         vcp_val.kind = VcpKind.RAW;
-        vcp_info.code = code;
         long? idx = line.rindex_of("=");
         if (catch idx) vcp_val.data.raw_val = 0;
         vcp_val.data.raw_val = line[idx + 1..]!.trim().to_uint()!;
@@ -253,6 +246,37 @@ fn VcpInfo? get_vcp(String code, String bus) => @pool() {
     }
 
     return vcp_info;
+}
+
+fn HashMap{String, VcpInfo}? get_vcp(String[] codes, String bus) => @pool() {
+    char[4096] buf;
+
+    String[] cmd = build_cmd(tmem, codes, bus);
+
+    String? output = process::run_capture_stdout(&buf, cmd);
+    if (catch output) return CMD_RUN_FAILED~;
+
+    String[] lines = output.trim().tsplit("\n");
+
+    HashMap{String, VcpInfo} results;
+    results.init(tmem);
+
+    foreach (line : lines) {
+        if (line.trim().len == 0) continue;
+
+        long? idx = line.index_of("0x");
+        if (catch idx) continue;
+        String? code = line[idx..idx + 3];
+
+        if (catch code) continue;
+
+        VcpInfo? info = parse_vcp_line(line);
+        if (catch info) continue;
+
+        results.set(code, info);
+    }
+
+    return results;
 }
 
 // fn UserDefine get_user_define_vals() {
@@ -268,17 +292,51 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
     LibcAllocator libc;
 
     @pool_init(&libc, 1024) {
-        MonitorState ms             = { };
-        VcpInfo brightness          = get_vcp(BRIGHTNESS, "2")!!;
-        VcpInfo contrast            = get_vcp(CONTRAST, "2")!!;
-        VcpInfo display_mode        = get_vcp(DISPLAY_MODE, "2")!!;
-        VcpInfo color_preset        = get_vcp(SELECT_COLOR_PRESET, "2")!!;
-        VcpInfo volume              = get_vcp(AUDIO_SPEAKER_VOLUME, "2")!!;
-        VcpInfo low_blue_light_plus = get_vcp(LOWBLUELIGHTPLUS, "2")!!;
-        VcpInfo audio_mute          = get_vcp(AUDIO_MUTE, "2")!!;
-        VcpInfo bi_gen2             = get_vcp(BIGEN2, "2")!!;
-        VcpInfo ama                 = get_vcp(AMA, "2")!!;
-        VcpInfo sharpness           = get_vcp(SHARPNESS, "2")!!;
+        MonitorState ms = { };
+
+        HashMap{String, VcpInfo} vcps = get_vcp(
+            {
+                BRIGHTNESS,
+                CONTRAST,
+                DISPLAY_MODE,
+                SELECT_COLOR_PRESET,
+                AUDIO_SPEAKER_VOLUME,
+                LOWBLUELIGHTPLUS,
+                AUDIO_MUTE,
+                BIGEN2,
+                AMA,
+                SHARPNESS
+            },
+            "2"
+        )!!;
+
+        VcpInfo? brightness          = vcps.get("0x10");
+        VcpInfo? contrast            = vcps.get("0x12");
+        VcpInfo? display_mode        = vcps.get("0xdc");
+        VcpInfo? color_preset        = vcps.get("0x14");
+        VcpInfo? volume              = vcps.get("0x62");
+        VcpInfo? low_blue_light_plus = vcps.get("0x19");
+        VcpInfo? audio_mute          = vcps.get("0x8d");
+        VcpInfo? bi_gen2             = vcps.get("0xe2");
+        VcpInfo? ama                 = vcps.get("0xf0");
+        VcpInfo? sharpness           = vcps.get("0x87");
+
+        if (catch brightness) return false;
+        if (catch contrast) return false;
+        if (catch display_mode) return false;
+        if (catch color_preset) return false;
+        if (catch volume) return false;
+        if (catch low_blue_light_plus) return false;
+        if (catch audio_mute) return false;
+        if (catch bi_gen2) return false;
+        if (catch ama) return false;
+        if (catch sharpness) return false;
+
+        ms.brightness = brightness.value.data.range_val[0];
+        ms.max_brightness = brightness.value.data.range_val[1];
+        ms.contrast = contrast.value.data.range_val[0];
+        ms.max_contrast = contrast.value.data.range_val[1];
+        ms.display_mode = convert_da_thing(display_mode.value.data.enum_val);
 
         ms.sharpness = sharpness.value.data.range_val[0];
         ms.ama = ama.value.data.raw_val;
@@ -286,15 +344,6 @@ fn bool load_monitor_state(BufferedChannel{MonitorState}* monitor_state_channel)
         ms.audio_mute = audio_mute.value.data.raw_val;
         ms.low_blue_light_plus = convert_lbl(low_blue_light_plus.value.data.enum_val);
         ms.color_temperature = color_preset.value.data.color_val.preset;
-        ms.brightness = brightness.value.data.range_val[0];
-        ms.max_brightness = brightness.value.data.range_val[1];
-
-        ms.contrast = contrast.value.data.range_val[0];
-        ms.max_contrast = contrast.value.data.range_val[1];
-
-        ms.display_mode = convert_da_thing(display_mode.value.data.enum_val);
-        // ms.user_define_color = color_preset.value.data.color_val.rgb;
-
         ms.volume = volume.value.data.raw_val;
 
         if (@ok(monitor_state_channel.push(ms))) return true;
@@ -550,6 +599,7 @@ constdef CommandType : uint {
     // SET_RED_GAIN,
 
 
+
     // SET_GREEN_GAIN,
 
     // SET_BLUE_GAIN,
@@ -784,7 +834,7 @@ fn void gui_thing(GuiArgs* args) {
                                 {
                                     // Brightness
                                     nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
-                                       String b_val = string::format(
+                                    String b_val = string::format(
                                         &libc,
                                         "Brightness: %d",
                                         (int)(brightness_slider_val * 100.0f)
@@ -821,7 +871,7 @@ fn void gui_thing(GuiArgs* args) {
 
                                     // Contrast
                                     nuklear::nk_layout_row_dynamic(ctx, ROW_CONTROL, 1);
-                                       String c_val = string::format(
+                                    String c_val = string::format(
                                         &libc,
                                         "Contrast: %d",
                                         (int)(constrast_slider_val * 100.0f)
@@ -1213,7 +1263,7 @@ fn void gui_thing(GuiArgs* args) {
                                     // Volume
                                     bool audio_is_muted = audio_mute == AUDIO_MUTE_VALUE;
 
-                                     String a_val = string::format(
+                                    String a_val = string::format(
                                         &libc,
                                         "Volume: %d",
                                         (int)(volume_slider_val * 100.0f)
@@ -1442,6 +1492,6 @@ fn int main(String[] args) {
     ts.join()!!;
 
     ga.monitor_state_channel.close();
-
+    // 
     return 0;
 }
