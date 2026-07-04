@@ -7,6 +7,8 @@ import nuklear_sdl_gl3;
 import std::thread::channel;
 import libc;
 import std::collections::map;
+import std::io::path;
+import std::os::env;
 
 const uint SDL_WINDOWPOS_CENTERED = 0x2FFF0000;
 const uint SDL_QUIT               = 0x100;
@@ -49,6 +51,8 @@ constdef CommandType : uint {
     SET_COLOR_PRESET,
     SET_VOLUME,
     // SET_RED_GAIN,
+
+
 
     // SET_GREEN_GAIN,
 
@@ -317,6 +321,8 @@ struct MonitorState {
 
 const COLOR_TEMPERATURE_REQUEST = "0x0c";
 // Well this ain't working, we have to write to 0x0c, values are:
+
+
 
 // 28 - 5000K - Reddish - 0x04
 
@@ -752,11 +758,65 @@ fn void fetch_dynamic_vcp_info(Allocator alloc, Monitor* monitor) => @pool() {
                 if (catch paren) continue;
                 monitor.usage_time_hours = value[eq + 2..paren - 1].trim().copy(alloc);
             case "0xca":
-                monitor.osd_control = value.copy(alloc);
+                DString osd_out;
+                osd_out.init(tmem);
+                long oi = 0;
+                while (oi < value.len) {
+                    if (value[oi] == '(') {
+                        long? close = value[oi..].index_of(")");
+                        if (catch close) {
+                            osd_out.append_char(value[oi]);
+                            oi++;
+                            continue;
+                        }
+                        oi += close + 1;
+                        continue;
+                    }
+                    osd_out.append_char(value[oi]);
+                    oi++;
+                }
+                monitor.osd_control = osd_out.str_view().trim().copy(alloc);
+
             case "0xcc":
                 monitor.osd_language = parse_enum_value(value).copy(alloc);
             case "0xd6":
-                monitor.power_mode = value.copy(alloc);
+                long? comma = value.index_of(",");
+                if (catch comma) {
+                    monitor.power_mode = value.trim().copy(alloc);
+                    continue;
+                }
+
+                String first = value[:comma];
+                String second = value[comma + 1..];
+
+                long? paren = second.index_of("(");
+                if (catch paren) monitor.power_mode = value.copy(alloc);
+                second = second[:paren!!];
+
+                long? c1 = first.index_of(":");
+                long? c2 = second.index_of(":");
+
+                String first_val;
+                if (catch c1) {
+                    first_val = first.trim();
+                } else {
+                    first_val = first[c1 + 1..].trim();
+                }
+
+                String second_val;
+                if (catch c2) {
+                    second_val = second.trim();
+                } else {
+                    second_val = second[c2 + 1..].trim();
+                }
+
+                if (first_val == "On") {
+                    monitor.power_mode = first_val.copy(alloc);
+                } else if (second_val == "On") {
+                    monitor.power_mode = second_val.copy(alloc);
+                } else {
+                    monitor.power_mode = (first_val.len > 0 ? first_val : second_val).copy(alloc);
+                }
             case "0xda":
                 monitor.scan_mode = parse_enum_value(value).copy(alloc);
             default:
@@ -859,7 +919,7 @@ fn Monitor detect_monitor(Allocator alloc, bool force_refresh = false) => @pool(
             case "0xac":
                 long? sp = value.index_of(" ");
                 if (catch sp) continue;
-                monitor.horizontal_frequency_hz = value[:sp];
+                monitor.horizontal_frequency_hz = value[:sp].copy(alloc);
             case "0xae":
                 long? sp = value.index_of(" ");
                 if (catch sp) continue;
@@ -875,17 +935,126 @@ fn Monitor detect_monitor(Allocator alloc, bool force_refresh = false) => @pool(
                 if (catch paren) continue;
                 monitor.usage_time_hours = value[eq + 2..paren - 1].trim().copy(alloc);
             case "0xc8":
-                monitor.controller_type = value.copy(alloc);
+                long? mfg_start = value.index_of("Mfg:");
+                long? mfg_paren = value.index_of("(");
+                if (catch mfg_start) {
+                    monitor.controller_type = value.copy(alloc);
+                    continue;
+                }
+                if (catch mfg_paren) {
+                    monitor.controller_type = value.copy(alloc);
+                    continue;
+                }
+
+                String mfg = value[mfg_start + 4..mfg_paren - 1].trim();
+
+                long? mh_idx = value.index_of("mh=");
+                long? ml_idx = value.index_of("ml=");
+                long? sh_idx = value.index_of("sh=");
+
+                if (catch mh_idx) monitor.controller_type = value.copy(alloc);
+                if (catch ml_idx) monitor.controller_type = value.copy(alloc);
+                if (catch sh_idx) monitor.controller_type = value.copy(alloc);
+
+                String mh = "";
+                String ml = "";
+                String sh = "";
+
+
+
+                {
+                    String? rest = value[mh_idx + 3..];
+                    if (catch rest) value.copy(alloc);
+
+                    long? c = rest.index_of(",");
+                    if (catch c) {
+                        mh = rest!!.trim();
+                    } else {
+                        mh = rest!![:c].trim();
+                    }
+                }
+
+                String? rest = value[ml_idx + 3..];
+                if (catch rest) value.copy(alloc);
+
+                long? c = rest!!.index_of(",");
+                if (catch c) {
+                    ml = rest!!.trim();
+                } else {
+                    ml = rest!![:c].trim();
+                }
+
+                String? val = value[sh_idx + 3..].trim();
+                if (catch val) value.copy(alloc);
+                sh = val!!;
+
+                monitor.controller_type = string::format(alloc, "%s (%s:%s:%s)", mfg, mh, ml, sh);
+
             case "0xc9":
                 monitor.firmware_level = value.copy(alloc);
             case "0xca":
-                monitor.osd_control = value.copy(alloc);
+                DString osd_out;
+                osd_out.init(tmem);
+                long oi = 0;
+
+                while (oi < value.len) {
+                    if (value[oi] == '(') {
+                        long? close = value[oi..].index_of(")");
+                        if (catch close) {
+                            osd_out.append_char(value[oi]);
+                            oi++;
+                            continue;
+                        }
+                        oi += close + 1;
+                        continue;
+                    }
+                    osd_out.append_char(value[oi]);
+                    oi++;
+                }
+                monitor.osd_control = osd_out.str_view().trim().copy(alloc);
+
             case "0xcc":
-                monitor.osd_language = parse_enum_value(value);
+                monitor.osd_language = parse_enum_value(value).copy(alloc);
             case "0xd6":
-                monitor.power_mode = value.copy(alloc);
+                long? comma = value.index_of(",");
+                if (catch comma) {
+                    monitor.power_mode = value.trim().copy(alloc);
+                    continue;
+                }
+
+                String first = value[:comma];
+                String second = value[comma + 1..];
+
+                long? paren = second.index_of("(");
+                if (catch paren) monitor.power_mode = value.copy(alloc);
+                second = second[:paren!!];
+
+                long? c1 = first.index_of(":");
+                long? c2 = second.index_of(":");
+
+                String first_val;
+                if (catch c1) {
+                    first_val = first.trim();
+                } else {
+                    first_val = first[c1 + 1..].trim();
+                }
+
+                String second_val;
+                if (catch c2) {
+                    second_val = second.trim();
+                } else {
+                    second_val = second[c2 + 1..].trim();
+                }
+
+                if (first_val == "On") {
+                    monitor.power_mode = first_val.copy(alloc);
+                } else if (second_val == "On") {
+                    monitor.power_mode = second_val.copy(alloc);
+                } else {
+                    monitor.power_mode = (first_val.len > 0 ? first_val : second_val).copy(alloc);
+                }
             case "0xda":
-                monitor.scan_mode = parse_enum_value(value);
+                monitor.scan_mode = parse_enum_value(value).copy(alloc);
             case "0xdf":
                 monitor.vcp_version = value.copy(alloc);
             default:
@@ -972,7 +1141,7 @@ fn void gui_thing(GuiArgs* args) {
             SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED,
             800,
-            600,
+            800,
             (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_OPENGL
                 | (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_SHOWN
                 | (uint)nuklear::SDL_WindowFlags.SDL_WINDOW_ALLOW_HIGHDPI
@@ -989,12 +1158,9 @@ fn void gui_thing(GuiArgs* args) {
         Nk_font_atlas* atlas;
         Nk_font* font;
         nuklear::nk_sdl_font_stash_begin(&atlas);
-        font = nuklear::nk_font_atlas_add_from_file(
-            atlas,
-            "./IosevkaNerdFont-Regular.ttf",
-            16.0f,
-            null
-        );
+        String font_path = resource_path(&libc, "IosevkaNerdFont-Regular.ttf");
+
+        font = nuklear::nk_font_atlas_add_from_file(atlas, font_path, 16.0f, null);
 
         nuklear::nk_sdl_font_stash_end();
         nuklear::nk_style_set_font(ctx, &font.handle);
@@ -1055,6 +1221,7 @@ fn void gui_thing(GuiArgs* args) {
 
         SystemInfoState system_info_state = NOT_FETCHED;
         Monitor system_info_cache;
+        bool force_refresh_requested      = false;
 
         Ama ama_mode;
         while (running) {
@@ -1151,17 +1318,15 @@ fn void gui_thing(GuiArgs* args) {
                                         brightness_max_value,
                                         0.01f
                                     )) {
-                                        if (@ok(
-                                            bc.try_push(
-                                                {
-                                                    .type = CommandType.SET_BRIGHTNESS,
-                                                    .value = {
-                                                        .brightness = (uint)(brightness_slider_val
-                                                            * 100.f)
-                                                    },
-                                                }
-                                            )
-                                        )) io::printn("sent");
+                                        (void)bc.try_push(
+                                            {
+                                                .type = CommandType.SET_BRIGHTNESS,
+                                                .value = {
+                                                    .brightness = (uint)(brightness_slider_val
+                                                        * 100.f)
+                                                },
+                                            }
+                                        );
                                     }
 
                                     nuklear::nk_layout_row_dynamic(ctx, SPACER_MD, 1);
@@ -1188,17 +1353,15 @@ fn void gui_thing(GuiArgs* args) {
                                         constrast_max_value,
                                         0.01f
                                     )) {
-                                        if (@ok(
-                                            bc.try_push(
-                                                {
-                                                    .type = CommandType.SET_CONTRAST,
-                                                    .value = {
-                                                        .contrast = (uint)(constrast_slider_val
-                                                            * 100.f)
-                                                    },
-                                                }
-                                            )
-                                        )) io::printn("sent");
+                                        (void)bc.try_push(
+                                            {
+                                                .type = CommandType.SET_CONTRAST,
+                                                .value = {
+                                                    .contrast = (uint)(constrast_slider_val
+                                                        * 100.f)
+                                                },
+                                            }
+                                        );
                                     }
 
                                     nuklear::nk_layout_row_dynamic(ctx, SPACER_SM, 1);
@@ -1225,18 +1388,16 @@ fn void gui_thing(GuiArgs* args) {
                                         sharpness_max_val,
                                         0.01f
                                     )) {
-                                        if (@ok(
-                                            bc.try_push(
-                                                {
-                                                    .type = CommandType.SET_SHARPNESS,
-                                                    .value = {
-                                                        .sharpness = (uint)(sharpness_slider_val
-                                                            * 100.f
-                                                            + 0.5f)
-                                                    },
-                                                }
-                                            )
-                                        )) io::printn("sent");
+                                        (void)bc.try_push(
+                                            {
+                                                .type = CommandType.SET_SHARPNESS,
+                                                .value = {
+                                                    .sharpness = (uint)(sharpness_slider_val
+                                                        * 100.f
+                                                        + 0.5f)
+                                                },
+                                            }
+                                        );
                                     }
 
                                     nuklear::nk_layout_row_dynamic(ctx, SPACER_MD, 1);
@@ -1265,17 +1426,15 @@ fn void gui_thing(GuiArgs* args) {
                                         )) {
                                             if (md.mode != low_blue_light_plus_val) {
                                                 low_blue_light_plus_val = md.mode;
-                                                if (@ok(
-                                                    bc.try_push(
-                                                        {
-                                                            .type = CommandType
-                                                                .SET_LOW_BLUE_LIGHT_PLUS,
-                                                            .value = {
-                                                                .lblp_mode = low_blue_light_plus_val
-                                                            },
-                                                        }
-                                                    )
-                                                )) io::printn("sent");
+                                                (void)bc.try_push(
+                                                    {
+                                                        .type = CommandType
+                                                            .SET_LOW_BLUE_LIGHT_PLUS,
+                                                        .value = {
+                                                            .lblp_mode = low_blue_light_plus_val
+                                                        },
+                                                    }
+                                                );
                                             }
                                         }
                                     }
@@ -1310,14 +1469,12 @@ fn void gui_thing(GuiArgs* args) {
                                         )) {
                                             if (selected) {
                                                 bi_gen2 = dm.val;
-                                                if (@ok(
-                                                    bc.try_push(
-                                                        {
-                                                            .type = CommandType.SET_BI_GEN2,
-                                                            .value = { .bi_gen2 = bi_gen2 },
-                                                        }
-                                                    )
-                                                )) io::printn("sent");
+                                                (void)bc.try_push(
+                                                    {
+                                                        .type = CommandType.SET_BI_GEN2,
+                                                        .value = { .bi_gen2 = bi_gen2 },
+                                                    }
+                                                );
                                             }
                                         }
                                     }
@@ -1351,14 +1508,12 @@ fn void gui_thing(GuiArgs* args) {
                                         )) {
                                             if (dm.mode != display_code) {
                                                 display_code = dm.mode;
-                                                if (@ok(
-                                                    bc.try_push(
-                                                        {
-                                                            .type = CommandType.SET_COLOR_MODE,
-                                                            .value = { .mode = display_code },
-                                                        }
-                                                    )
-                                                )) io::printn("sent");
+                                                (void)bc.try_push(
+                                                    {
+                                                        .type = CommandType.SET_COLOR_MODE,
+                                                        .value = { .mode = display_code },
+                                                    }
+                                                );
                                             }
                                         }
                                     }
@@ -1387,17 +1542,12 @@ fn void gui_thing(GuiArgs* args) {
                                             if (tm.mode != color_code) {
                                                 color_code = tm.mode;
                                                 if (color_code != ColorTemperature.USER_DEFINE) {
-                                                    if (@ok(
-                                                        bc.try_push(
-                                                            {
-                                                                .type = CommandType
-                                                                    .SET_COLOR_PRESET,
-                                                                .value = {
-                                                                    .color_temp = color_code
-                                                                },
-                                                            }
-                                                        )
-                                                    )) io::printn("sent");
+                                                    (void)bc.try_push(
+                                                        {
+                                                            .type = CommandType.SET_COLOR_PRESET,
+                                                            .value = { .color_temp = color_code },
+                                                        }
+                                                    );
                                                 }
                                             }
                                         }
@@ -1425,14 +1575,12 @@ fn void gui_thing(GuiArgs* args) {
                                         )) {
                                             if (tm.mode != ama_mode) {
                                                 ama_mode = tm.mode;
-                                                if (@ok(
-                                                    bc.try_push(
-                                                        {
-                                                            .type = CommandType.SET_AMA,
-                                                            .value = { .ama = (uint)ama_mode },
-                                                        }
-                                                    )
-                                                )) io::printn("sent");
+                                                (void)bc.try_push(
+                                                    {
+                                                        .type = CommandType.SET_AMA,
+                                                        .value = { .ama = (uint)ama_mode },
+                                                    }
+                                                );
                                             }
                                         }
                                     }
@@ -1543,14 +1691,12 @@ fn void gui_thing(GuiArgs* args) {
                                         )) {
                                             if (dm.val != audio_mute) {
                                                 audio_mute = dm.val;
-                                                if (@ok(
-                                                    bc.try_push(
-                                                        {
-                                                            .type = CommandType.SET_AUDIO_MUTE,
-                                                            .value = { .audio_mute = audio_mute },
-                                                        }
-                                                    )
-                                                )) io::printn("sent");
+                                                (void)bc.try_push(
+                                                    {
+                                                        .type = CommandType.SET_AUDIO_MUTE,
+                                                        .value = { .audio_mute = audio_mute },
+                                                    }
+                                                );
                                             }
                                         }
                                     }
@@ -1585,16 +1731,14 @@ fn void gui_thing(GuiArgs* args) {
                                         1.0f,
                                         0.01f
                                     )) {
-                                        if (@ok(
-                                            bc.try_push(
-                                                {
-                                                    .type = CommandType.SET_VOLUME,
-                                                    .value = {
-                                                        .volume = (uint)(volume_slider_val * 100.f)
-                                                    },
-                                                }
-                                            )
-                                        )) io::printn("sent");
+                                        (void)bc.try_push(
+                                            {
+                                                .type = CommandType.SET_VOLUME,
+                                                .value = {
+                                                    .volume = (uint)(volume_slider_val * 100.f)
+                                                },
+                                            }
+                                        );
                                     }
 
                                     if (audio_is_muted) nuklear::nk_widget_disable_end(ctx);
@@ -1619,12 +1763,22 @@ fn void gui_thing(GuiArgs* args) {
                                             "Fetching monitor information...",
                                             (uint)Nk_text_alignment.NK_TEXT_CENTERED
                                         );
-
-                                        system_info_cache = detect_monitor(&libc);
+                                        system_info_cache = detect_monitor(
+                                            &libc,
+                                            force_refresh_requested
+                                        );
+                                        force_refresh_requested = false;
                                         system_info_state = FETCHED;
 
                                     case FETCHED:
                                         render_monitor_info(ctx, &system_info_cache);
+
+                                        nuklear::nk_spacing(ctx, 1);
+                                        nuklear::nk_layout_row_dynamic(ctx, 30, 1);
+                                        if (nuklear::nk_button_label(ctx, "Refresh")) {
+                                            force_refresh_requested = true;
+                                            system_info_state = NOT_FETCHED;
+                                        }
                                 }
                         }
                         nuklear::nk_group_end(ctx);
@@ -1828,6 +1982,29 @@ fn String get_bus(Allocator alloc) => @pool() {
 
     return device_path;
 }
+
+fn String resource_path(Allocator alloc, String name) {
+    char[4096] buf;
+
+    sz len = libc::readlink("/proc/self/exe", &buf[0], buf.len - 1);
+    if (len <= 0) {
+        return name.copy(alloc);
+    }
+
+    buf[len] = '\0';
+
+    ZString exe = (ZString)&buf[0];
+    Path dir    = (Path)((String)exe.str_view()).path_dirname(alloc)!!;
+
+    PathPosix dev = dir.tappend("/../src/").tappend(name)!!;
+
+    if (path::exists(dev)) {
+        return dev.copy(alloc);
+    }
+
+    return dir.tappend("/../share/benq/").tappend(name).copy(alloc)!!;
+}
+
 fn int main(String[] args) => @pool() {
     Thread tg, tb, ts;
     GuiArgs ga = { };
