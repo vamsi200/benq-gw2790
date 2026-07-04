@@ -1996,7 +1996,7 @@ fn String resource_path(Allocator alloc, String name) {
     ZString exe = (ZString)&buf[0];
     Path dir    = (Path)((String)exe.str_view()).path_dirname(alloc)!!;
 
-    PathPosix dev = dir.tappend("/../src/").tappend(name)!!;
+    PathPosix dev = dir.tappend("/../resources/").tappend(name)!!;
 
     if (path::exists(dev)) {
         return dev.copy(alloc);
