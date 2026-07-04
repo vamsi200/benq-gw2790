@@ -3,7 +3,6 @@ import std::io;
 import std::os::process;
 import std::collections::list;
 import nuklear;
-import nuklear_sdl_gl3;
 import std::thread::channel;
 import libc;
 import std::collections::map;
