@@ -64,7 +64,18 @@ View monitor information reported through DDC/CI.
 
 ![System Information](resources/s4.png)
 
-
+# Installation 
+ - Download binary from [link](https://github.com/vamsi200/benq-gw2790/releases/)
+ - Make it executable:
+     - ```bash
+       chmod +x Benq-x86_64.AppImage
+       ```
+  - Run it:
+      ```bash
+      ./Benq-x86_64.AppImage
+      ```
+      
+# Building from source
 ## Dependencies
 
 You need the following:
