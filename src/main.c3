@@ -405,7 +405,7 @@ fn String[] build_cmd(Allocator alloc, String[] cmd, String bus) {
 }
 
 
-fn VcpInfo? parse_vcp_line(String line) {
+fn VcpInfo? parse_vcp_line(String line) => @pool() {
     VcpInfo vcp_info = { };
     VcpValue vcp_val = { };
 
@@ -691,7 +691,7 @@ fn bool load_static_info(Allocator alloc, Monitor* monitor) {
     return true;
 }
 
-fn void save_static_info(Monitor* monitor) {
+fn void save_static_info(Monitor* monitor) => @pool() {
     DString out;
     out.init(tmem);
     out.appendf("device_path=%s\n", monitor.device_path);
@@ -758,7 +758,7 @@ fn void fetch_dynamic_vcp_info(Allocator alloc, Monitor* monitor) => @pool() {
                 monitor.usage_time_hours = value[eq + 2..paren - 1].trim().copy(alloc);
             case "0xca":
                 DString osd_out;
-                osd_out.init(tmem);
+                osd_out.init(alloc);
                 long oi = 0;
                 while (oi < value.len) {
                     if (value[oi] == '(') {
@@ -993,7 +993,7 @@ fn Monitor detect_monitor(Allocator alloc, bool force_refresh = false) => @pool(
                 monitor.firmware_level = value.copy(alloc);
             case "0xca":
                 DString osd_out;
-                osd_out.init(tmem);
+                osd_out.init(alloc);
                 long oi = 0;
 
                 while (oi < value.len) {
@@ -2007,6 +2007,7 @@ fn String resource_path(Allocator alloc, String name) {
 fn int main(String[] args) => @pool() {
     Thread tg, tb, ts;
     GuiArgs ga = { };
+
     ga.channel = channel::create_buffered(tmem, 1024 * 1024)!!;
     ga.monitor_state_channel = channel::create_buffered(tmem, 1024 * 1024)!!;
     defer ga.monitor_state_channel.destroy();
@@ -2016,6 +2017,7 @@ fn int main(String[] args) => @pool() {
     msa.bus = get_bus(tmem);
     msa.monitor_state_channel = ga.monitor_state_channel;
 
+    defer mem::alloc::free(tmem, msa.bus);
     tg.create((ThreadFn)&gui_thing, &ga)!!;
     ts.create((ThreadFn)&load_monitor_state, &msa)!!;
     tb.create((ThreadFn)&change_stuff, ga.channel)!!;
